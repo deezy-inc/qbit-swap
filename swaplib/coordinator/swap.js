@@ -20,7 +20,7 @@ import {
   parseTx, serializeTx,                             // for splicing the preimage into a pre-signed claim
 } from "../js/index.js";
 import { qbit, btc } from "./chain.js";
-import { btcFeerates, cachedBtcFeerates } from "./fees.js";
+import { btcFeerates, cachedBtcFeerates, cachedQbitFeerates } from "./fees.js";
 
 export const States = ["CREATED", "READY", "FROM_FUNDED", "TO_FUNDED", "MATURING", "CLAIMABLE", "CLAIMED", "COMPLETE", "REFUNDED", "ABORTED"];
 const TERMINAL = ["COMPLETE", "REFUNDED", "ABORTED"];
@@ -292,7 +292,7 @@ export function view(s, role) {
   return {
     id: s.id, role, state: s.state, terms: s.terms, direction: s.terms.direction, roles: s.roles,
     H: s.H, locktimes: s.locktimes, htlc: s.htlc, funding: s.funding, heights: s.heights,
-    confsTarget: s.confsTarget, refund: s.refund, feerates: cachedBtcFeerates(),
+    confsTarget: s.confsTarget, refund: s.refund, feerates: { btc: cachedBtcFeerates(), qbit: cachedQbitFeerates() },
     counterparty: s.party[role === "alice" ? "bob" : "alice"], self: s.party[role],
     counterpartyOnline: isOnline(s, role === "alice" ? "bob" : "alice"), selfOnline: isOnline(s, role),
     safetyNet: { self: !!s.finish?.[role], counterparty: !!s.finish?.[role === "alice" ? "bob" : "alice"] },

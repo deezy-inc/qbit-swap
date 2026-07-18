@@ -1,5 +1,8 @@
-// mempool.space recommended Bitcoin feerates (sat/vB), cached (default ~90s). The watchtower uses
-// these to pick/escalate which pre-signed fee-ladder tier to broadcast for a Bitcoin claim/refund.
+// Recommended feerates (sat/vB), cached (default ~90s). BTC comes from mempool.space; Qbit has no
+// external oracle, so it comes from the Qbit node itself (estimatesmartfee → relay floor). Both are
+// used to size live claims/refunds (the client reads them from the swap view) and to pick/escalate the
+// watchtower's pre-signed fee-ladder tier.
+import { qbit } from "./chain.js";
 const URL = (process.env.MEMPOOL_URL || "https://mempool.space/api").replace(/\/$/, "");
 const TTL = Number(process.env.FEES_TTL_MS || 90000);
 let cache = null, at = 0;
@@ -18,3 +21,13 @@ export async function btcFeerates() {
 // browser can size its live claim at mempool's "High priority" (fastestFee). Keep it warm by calling
 // btcFeerates() on a timer (server.js). `fastestFee` here === mempool.space's High-priority tier.
 export const cachedBtcFeerates = () => cache || FALLBACK;
+
+// Qbit feerates from the node's own estimatesmartfee (no external oracle exists for Qbit). Same shape
+// and caching as btcFeerates; kept warm on the same server.js timer.
+let qcache = null, qat = 0;
+export async function qbitFeerates() {
+  if (qcache && Date.now() - qat < TTL) return qcache;
+  try { const b = await qbit.feeBundle(); if (b) { qcache = b; qat = Date.now(); } } catch { /* keep last good value */ }
+  return qcache || FALLBACK;
+}
+export const cachedQbitFeerates = () => qcache || FALLBACK;

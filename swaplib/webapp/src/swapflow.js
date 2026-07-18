@@ -179,6 +179,17 @@ export class SwapClient {
   async #claim(v, leg, preimage) { return this.#send(leg, "claim", await this.#build(v, leg, "claim", preimage, this.#liveFee(v, leg, "claim"))); }
   async #refund(v, leg) { return this.#send(leg, "refund", await this.#build(v, leg, "refund", new Uint8Array(0), this.#liveFee(v, leg, "refund"))); }
 
+  // Build (but do NOT broadcast) this party's claim or refund sweep at the current view — the same tx
+  // #claim/#refund would send. Exposed for tests/tooling (e.g. checking timelock maturity). A refund's
+  // nLockTime is the leg's CLTV height, so it is consensus-invalid ("non-final") until the chain reaches
+  // it; a claim carries no timelock. Returns { leg, hex }.
+  async buildSweep(v, kind) {
+    const { claim, refund } = this.legs(v);
+    const leg = kind === "refund" ? refund : claim;
+    const preimage = kind === "refund" ? new Uint8Array(0) : (this.role === "alice" ? this.secret : bin(v.preimage));
+    return { leg, hex: hex(await this.#build(v, leg, kind, preimage, this.#liveFee(v, leg, kind))) };
+  }
+
   async #buildQbit(v, kind, preimage, feeSats) {
     const f = v.funding.qbit, leaf = bin(v.htlc.qbit.leaf), spk = bin(v.htlc.qbit.spk);
     const destSpk = addressToScriptPubKey(this.qbitDest), prevoutLE = bin(f.txid).reverse(), outVal = f.amountSats - feeSats;
@@ -204,13 +215,13 @@ const LADDER = { btc: [2, 8, 25, 75, 200], qbit: [1, 5] };
 const VBYTES = { btc: { claim: 150, refund: 120 }, qbit: { claim: 1000, refund: 1000 } };   // rough (SLH-DSA witness dominates the qbit legs)
 const FEE_FLOOR = { btc: 400, qbit: 8000 };
 const feeFor = (leg, kind, feerate) => Math.max(FEE_FLOOR[leg], Math.round(feerate * VBYTES[leg][kind]));
-// Qbit is uncongested, so its live fee is fixed; BTC is sized from the live mempool recommendation.
-const QBIT_FEE = { claim: 100000, refund: 100000 };
-// The fee (sats) for a live-signed claim/refund. BTC: mempool "High priority" (fastestFee) for the
-// urgent claim, "Medium" (halfHourFee) for the timelock-gated refund. This is the NORMAL path; the
-// pre-signed ladder is only needed in extreme situations (party offline during a fee spike).
+// The fee (sats) for a live-signed claim/refund, sized from the coordinator's per-chain recommendation
+// (`view.feerates = { btc, qbit }`): High priority (fastestFee) for the urgent claim, Medium
+// (halfHourFee) for the timelock-gated refund. BTC comes from mempool.space; Qbit from the node's own
+// estimatesmartfee. This is the NORMAL path; the pre-signed ladder is only for extreme situations (a
+// party offline during a fee spike).
 export function dynFee(leg, kind, feerates) {
-  if (leg !== "btc") return QBIT_FEE[kind] ?? QBIT_FEE.claim;
-  const fr = Math.max(1, (kind === "claim" ? feerates?.fastestFee : feerates?.halfHourFee) || 0);
-  return Math.max(FEE_FLOOR.btc, Math.round(fr * VBYTES.btc[kind]));
+  const tier = kind === "claim" ? "fastestFee" : "halfHourFee";
+  const fr = Math.max(1, feerates?.[leg]?.[tier] || 0);
+  return Math.max(FEE_FLOOR[leg], Math.round(fr * VBYTES[leg][kind]));
 }

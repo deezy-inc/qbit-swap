@@ -5,7 +5,7 @@ import http from "node:http";
 import { createSwap, getSwap, roleOf, submitParty, broadcast, view, poll, allSwaps, subscribe, markSeen, addConnection, dropConnection, sweepPresence, submitFinish, driveWatchtower } from "./swap.js";
 import { createOffer, getOffer, isMaker, book, takeOffer, cancelOffer, makerView } from "./offers.js";
 import { btc } from "./chain.js";
-import { btcFeerates } from "./fees.js";
+import { btcFeerates, qbitFeerates } from "./fees.js";
 
 const json = (res, code, body) => { res.writeHead(code, { "content-type": "application/json" }); res.end(JSON.stringify(body)); };
 const MAX_BODY = 1 << 20;   // 1 MB — finish bundles (pre-signed txs) are the largest legit input, well under this
@@ -121,7 +121,8 @@ export function startServer(port = 8787) {
       watching = true;
       setInterval(watchTick, 2000); setInterval(sweepPresence, 4000);
       setInterval(cleanupWatch, Number(process.env.WATCH_CLEANUP_MS || 21600000));  // cleanup check every 6h; rotation is count-gated
-      btcFeerates().catch(() => {}); setInterval(() => btcFeerates().catch(() => {}), 60000);  // keep the mempool.space cache warm for the view's `feerates`
+      const warmFees = () => { btcFeerates().catch(() => {}); qbitFeerates().catch(() => {}); };  // keep the view's `feerates` (btc: mempool.space, qbit: node estimatesmartfee) warm
+      warmFees(); setInterval(warmFees, 60000);
     }
     resolve(server);
   }));

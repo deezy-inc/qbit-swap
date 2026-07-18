@@ -163,6 +163,22 @@ export class Chain {
     return this.rpc("getrawtransaction", txid, true);
   }
 
+  // Node-driven feerate estimate (sat/vB), shaped like the mempool.space recommendation. Used for the
+  // Qbit leg, which has no external fee oracle: ask the node's own `estimatesmartfee`, and fall back to
+  // the mempool relay floor (`getmempoolinfo`) when the node has no estimate yet (a young/quiet chain
+  // like regtest returns none). estimatesmartfee.feerate is BTC/kvB → ×1e5 = sat/vB.
+  async feeBundle() {
+    const est = async (target, mode) => {
+      try { const r = await this.rpc("estimatesmartfee", target, mode); if (r && r.feerate > 0) return r.feerate * 1e5; } catch { /* unsupported / no data */ }
+      return null;
+    };
+    let floor = 1;
+    try { const mi = await this.rpc("getmempoolinfo"); const f = mi?.mempoolminfee ?? mi?.minrelaytxfee; if (f > 0) floor = f * 1e5; } catch { /* keep 1 */ }
+    const norm = (v) => Math.max(1, Math.round(v ?? floor));
+    const [fast, half, hour] = [await est(1, "CONSERVATIVE"), await est(3, "ECONOMICAL"), await est(6, "ECONOMICAL")];
+    return { fastestFee: norm(fast), halfHourFee: norm(half ?? fast), hourFee: norm(hour ?? half ?? fast) };
+  }
+
   // Qbit only: reorg-safe confirmation target for a trade value + security level.
   async confTarget(valueSats, level = "high") {
     const r = await this.rpc("getconfirmationtarget", valueSats, level);

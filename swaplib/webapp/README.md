@@ -54,6 +54,9 @@ Set the coordinator URL in the create form (or `window.QBIT_COORDINATOR`).
   through a full swap **in both directions** to COMPLETE against the live coordinator and chains.
 - `TRIAL_URL=https://<host> node test/browser.e2e.mjs` (needs a running trial) — Playwright drives the
   actual wizard UI (creator + participant, both directions) through the faucet to COMPLETE.
+- `DEV_CONFS_CAP=2 node test/premature.e2e.mjs` (needs the regtest lab) — each party tries to broadcast
+  a sweep **before maturity**: the CLTV-locked refunds are rejected as `non-final` (by the node and the
+  coordinator) until the chain reaches the timelock, while a claim (no timelock) is accepted immediately.
 
 ## Security notes
 - Keys never leave the browser; the coordinator is keyless and sees only public data (and the preimage
