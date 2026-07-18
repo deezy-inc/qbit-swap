@@ -106,6 +106,12 @@ export const allSwaps = () => [...swaps.values()];
 // Party submits pubkeys + destination addresses. The creator (alice/initiator) also submits H.
 export async function submitParty(s, role, data) {
   if (s.state !== "CREATED" && s.state !== "READY") throw new Error("party data locked");
+  // First-come lock: once a slot is filled it can't be overwritten by different keys. This makes a
+  // shared link single-use — a second person opening the same link is rejected rather than racing to
+  // replace the participant (which could leave the first funder's deposit keyed to someone else). The
+  // same party reconnecting (same keys, e.g. from their backup) is idempotent and allowed.
+  const existing = s.party[role];
+  if (existing && (existing.qbitPub !== data.qbitPub || existing.btcPub !== data.btcPub)) throw new Error("this swap has already been joined by someone else");
   if (role === "alice" && data.H) s.H = data.H;
   s.party[role] = { qbitPub: data.qbitPub, btcPub: data.btcPub, btcDest: data.btcDest, qbitDest: data.qbitDest };
   if (s.party.alice && s.party.bob && s.H) await deriveHtlcs(s);

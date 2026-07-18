@@ -21,7 +21,7 @@ jobs:
         working-directory: swaplib/js
         run: npm install --no-audit --no-fund && npm test
 
-      - name: coordinator — esplora BTC adapter (mocked fetch: mapping + rate-limit retry)
+      - name: "coordinator — esplora BTC adapter (mocked fetch: mapping + rate-limit retry)"
         working-directory: swaplib/coordinator
         run: npm install --no-audit --no-fund && npm test
 
