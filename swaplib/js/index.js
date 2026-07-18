@@ -16,7 +16,7 @@ export {
   p2mrAddress, segwitAddr, P2MR_LEAF_VERSION, P2MR_CONTROL_SINGLE_LEAF, OP,
 } from "./p2mr.js";
 export { p2mrSighash, SIGHASH_DEFAULT } from "./sighash.js";
-export { addressToScriptPubKey } from "./addr.js";
+export { addressToScriptPubKey, addressCoin } from "./addr.js";
 export { parseTx, serializeTx } from "./tx.js";
 export { slhDsaSign, slhDsaKeygen } from "./signer.js";
 

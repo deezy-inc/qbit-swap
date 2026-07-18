@@ -58,7 +58,19 @@ Set the coordinator URL in the create form (or `window.QBIT_COORDINATOR`).
 ## Security notes
 - Keys never leave the browser; the coordinator is keyless and sees only public data (and the preimage
   only once it's on-chain).
-- One backup file protects one swap for ~20 minutes; losing it before settling can only ever lose that
-  single swap (ephemeral keys, no shared seed) — and even then the counterparty can't claim without the
-  preimage, so a stalled swap refunds.
-- Passkey secrets are device/credential-bound (PRF); the passphrase-wrapped backup is what travels.
+- **HTLC verification:** before showing a deposit address, the client independently re-derives both
+  HTLC scriptPubKeys from its own keys + the counterparty pubkey + `H` + locktimes and checks they match
+  the coordinator's — a derivation bug (or tampering) that produced a script it can't claim/refund halts
+  the swap before any funds move (`SwapClient.verifyHtlc`).
+- **Address validation:** receive/refund addresses are checked to be a valid address *on the right chain*
+  (`addressCoin`), so a BTC address can't be entered where a QBT one is needed (which would send funds to
+  an unspendable cross-chain output).
+- **Underfunding:** the coordinator only counts a leg as funded once the deposit meets the agreed amount,
+  so a counterparty can't underfund their HTLC and short the other side.
+- **Single-use link:** the first party to join a trade link claims the participant slot; a second person
+  opening the same link is rejected rather than racing to replace them.
+- One backup file protects one swap; losing it before settling can only ever lose that single swap
+  (ephemeral keys, no shared seed) — and a stalled swap refunds. Backups are plaintext for now.
+- **Not yet:** the counterparty's pubkey is currently taken on trust from the coordinator — a malicious
+  coordinator could MITM the pubkey exchange. Mitigation (planned): an out-of-band SAS/fingerprint the
+  two parties compare before funding. Also: timelocks are tuned per chain block-time before mainnet.

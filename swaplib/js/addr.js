@@ -60,6 +60,19 @@ function decodeBase58Check(addr) {
 // Known legacy version bytes: P2PKH (0x00 main / 0x6f test/regtest), P2SH (0x05 main / 0xc4 test).
 const P2PKH = new Set([0x00, 0x6f]), P2SH = new Set([0x05, 0xc4]);
 
+// Which coin an address belongs to, by network prefix — so the app can reject a BTC address where a
+// QBT one is needed (or vice versa), which would otherwise send funds to an unspendable cross-chain
+// output. Qbit is p2mr/bech32m only (no legacy base58); Bitcoin has bech32 + base58.
+const BTC_HRPS = ["bcrt", "bc", "tb", "sb"];
+const QBIT_HRPS = ["qbrt", "qbt", "tqb", "qb"];
+export function addressCoin(addr) {
+  const l = (addr || "").trim().toLowerCase();
+  for (const h of QBIT_HRPS) if (l.startsWith(h + "1")) return "qbit";
+  for (const h of BTC_HRPS) if (l.startsWith(h + "1")) return "btc";
+  if (/^[1235mn]/.test((addr || "").trim())) { try { addressToScriptPubKey(addr.trim()); return "btc"; } catch { /* not base58 */ } }   // btc legacy
+  return null;
+}
+
 export function addressToScriptPubKey(addr) {
   let bechErr;
   try { const { witver, program } = decodeBech32(addr); return witnessSpk(witver, program); }

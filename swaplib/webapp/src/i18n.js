@@ -71,6 +71,7 @@ const en = {
   stSetup: "Setting up the swap…",
   loadingSwap: "Loading swap…", fetchingTerms: "fetching terms",
   errEnterAddr: "enter a {coin} address",
+  errBadAddr: "That doesn't look like a valid {coin} address — double-check it's a {coin} address on the right network.",
   errReadBackup: "Could not read backup: {msg}", errRestore: "Could not restore: {msg}",
   // order book
   orderBook: "Order book", buyQbt: "Buy QBT", sellQbt: "Sell QBT",
@@ -84,6 +85,7 @@ const en = {
   armedNet: "Safety net armed ✓ — you can safely close this tab now; the swap will finish or refund on its own.",
   leaveWarn: "Your safety net isn't set up yet — if you leave now you'll need to come back to finish or get a refund.",
   underfundWarn: "⚠ A deposit came in below the agreed amount, so the swap is paused. An underfunded deposit can be refunded after its timelock.",
+  securityErr: "⚠ Security check failed — the swap's addresses don't match your keys. Do NOT send any funds. Refresh the page or start over.",
 };
 const zh = {
   tagline: "非托管原子兑换 BTC ⇄ QBT · 密钥保存在您的浏览器中",
@@ -149,6 +151,7 @@ const zh = {
   stSetup: "正在设置兑换…",
   loadingSwap: "正在加载兑换…", fetchingTerms: "正在获取交易条款",
   errEnterAddr: "请输入 {coin} 地址",
+  errBadAddr: "这看起来不是有效的 {coin} 地址——请确认它是正确网络上的 {coin} 地址。",
   errReadBackup: "无法读取备份：{msg}", errRestore: "无法恢复：{msg}",
   // order book
   orderBook: "订单簿", buyQbt: "买入 QBT", sellQbt: "卖出 QBT",
@@ -162,6 +165,7 @@ const zh = {
   armedNet: "安全网已启用 ✓——您现在可以安全关闭此标签页；兑换将自动完成或退款。",
   leaveWarn: "您的安全网尚未设置——如果现在离开，您需要回来才能完成或退款。",
   underfundWarn: "⚠ 有一笔存入金额低于约定金额，兑换已暂停。金额不足的存入可在其时间锁到期后退款。",
+  securityErr: "⚠ 安全校验失败——兑换地址与您的密钥不匹配。请勿发送任何资金。请刷新页面或重新开始。",
 };
 const DICTS = { en, zh };
 export const LANGS = [["en", "EN"], ["zh", "中文"]];

@@ -5,6 +5,19 @@
 import { SwapClient } from "./swapflow.js";
 import { exportBackup, importBackup, Vault } from "./keystore.js";
 import { t, getLang, setLang, LANGS } from "./i18n.js";
+import { addressToScriptPubKey, addressCoin } from "@qbit-swap/client";
+
+// Validate a receiving/refund address: non-empty, decodable, and on the RIGHT chain — a BTC address
+// where a QBT one is needed (or vice versa) would send funds to an unspendable cross-chain output.
+function validAddr(value, coin) {
+  const a = (value || "").trim();
+  if (!a) throw new Error(t("errEnterAddr", { coin }));
+  const want = coin === "BTC" ? "btc" : "qbit";
+  let ok = false;
+  try { addressToScriptPubKey(a); ok = addressCoin(a) === want; } catch { ok = false; }
+  if (!ok) throw new Error(t("errBadAddr", { coin }));
+  return a;
+}
 
 const DEFAULT_COORD = globalThis.QBIT_COORDINATOR || "http://127.0.0.1:8787";
 const FAUCET = globalThis.QBIT_TRIAL_FAUCET || null;
@@ -44,8 +57,10 @@ function screen({ title, subtitle, body = [], cta, onCta, secondary, back }) {
   const footer = (backLink || secondary) ? h("div", { style: "margin-top:14px;display:flex;justify-content:space-between;align-items:center;gap:12px" }, backLink || h("span"), secondary || h("span")) : null;
   return h("div", { class: "card" }, h("h2", {}, title), subtitle ? h("p", { class: "note", style: "margin-top:-4px" }, subtitle) : null, ...body, btn, footer);
 }
-const bigChoice = (label, sub, onClick) => h("button", { class: "primary", style: "width:100%;text-align:left;padding:16px;margin-top:10px;display:block", onclick: onClick },
-  h("div", { style: "font-size:16px" }, label), h("div", { style: "opacity:.85;font-size:13px;font-weight:400;margin-top:2px" }, sub));
+const bigChoice = (glyph, label, sub, onClick) => h("button", { class: "choice", onclick: onClick },
+  h("span", { class: "glyph" }, glyph),
+  h("span", { class: "ct" }, h("b", {}, label), h("span", {}, sub)),
+  h("span", { class: "arr", "aria-hidden": "true" }, "→"));
 const field = (placeholder, value = "") => h("input", { placeholder, value });
 // Copy button that flashes a "copied" label, then reverts after a moment.
 function copyButton(labelKey, copiedKey, getText) {
@@ -81,8 +96,8 @@ async function init() {
     screen({
       title: t("swapWhichWay"), subtitle: t("nonCustodial"),
       body: [
-        bigChoice(t("haveBtc"), t("haveBtcSub"), () => chooseDirection("btc2qbt")),
-        bigChoice(t("haveQbt"), t("haveQbtSub"), () => chooseDirection("qbt2btc")),
+        bigChoice("₿", t("haveBtc"), t("haveBtcSub"), () => chooseDirection("btc2qbt")),
+        bigChoice("Q", t("haveQbt"), t("haveQbtSub"), () => chooseDirection("qbt2btc")),
       ],
     }),
     await recoverCard(resumable),
@@ -213,7 +228,7 @@ function stepReceive() {
   render(screen({
     title: t("receiveTitle", { coin: recv }), subtitle: t("receiveSub", { coin: recv }),
     body: [inp, h("p", { class: "note" }, t("feeNote"))], cta: t("continue"),
-    onCta: () => { if (!inp.value.trim()) throw new Error(t("errEnterAddr", { coin: recv })); flow.receiveAddr = inp.value.trim(); stepRefund(); },
+    onCta: () => { flow.receiveAddr = validAddr(inp.value, recv); stepRefund(); },
     back: flow.mode === "create" ? () => stepAmount() : flow.mode === "take" ? () => stepTakeConfirm() : () => stepInvited(),
   }));
 }
@@ -228,8 +243,7 @@ function stepRefund() {
     title: t("refundTitle", { coin: send }), subtitle: t("refundSub"),
     body: [inp], cta,
     onCta: async () => {
-      if (!inp.value.trim()) throw new Error(t("errEnterAddr", { coin: send }));
-      flow.refundAddr = inp.value.trim();
+      flow.refundAddr = validAddr(inp.value, send);
       flow.mode === "create" ? await doCreate() : flow.mode === "take" ? await doTake() : await doJoin();
     },
     back: () => stepReceive(),
@@ -337,10 +351,12 @@ function renderLive(card, v) {
     h("h2", { style: "margin:0" }, headline),
     h("span", { class: "badge " + (STATE_CLASS[v.state] || "") }, v.state)));
 
+  if (v.securityError) { liveGuard = { risky: false }; card.append(h("p", { class: "note", style: "color:var(--bad);font-weight:600;margin-top:12px" }, t("securityErr"))); return; }
+
   if (!terminal) {
     const online = v.counterpartyOnline;
-    card.append(h("div", { class: "note", style: "display:flex;align-items:center;gap:7px;margin-top:4px" },
-      h("span", { style: `display:inline-block;width:9px;height:9px;border-radius:50%;background:${online ? "var(--good)" : "var(--warn)"};box-shadow:0 0 6px ${online ? "var(--good)" : "var(--warn)"}` }),
+    card.append(h("div", { class: "note statusline", style: "margin-top:8px" },
+      h("span", { class: `dot ${online ? "live" : "idle"}` }),
       online ? t("cpOnline") : t("cpOffline")));
   }
   // Safety net: once both legs are funded, the client pre-signs a fee-ladder claim + refund and the
@@ -348,7 +364,7 @@ function renderLive(card, v) {
   const bothFunded = v.funding?.btc && v.funding?.qbit, armed = v.safetyNet?.self;
   liveGuard = { risky: !terminal && !!v.funding?.[fundLeg] && !armed };
   if (!terminal && bothFunded) {
-    card.append(h("div", { class: "note", style: `display:flex;align-items:center;gap:7px;margin-top:4px;color:${armed ? "var(--good)" : "var(--warn)"}` },
+    card.append(h("div", { class: "note statusline", style: `margin-top:6px;color:${armed ? "var(--good)" : "var(--warn)"}` },
       h("span", {}, armed ? "🛡️" : "⏳"), armed ? t("armedNet") : t("armingNet")));
   }
   if (!terminal && flow.mode === "create" && flow.bobLink) {
@@ -407,7 +423,7 @@ function renderChrome() {
   const el = document.getElementById("lang"); if (!el) return;
   while (el.firstChild) el.removeChild(el.firstChild);
   for (const [code, label] of LANGS) {
-    el.append(h("a", { href: "#", style: `margin-left:12px;cursor:pointer;${getLang() === code ? "font-weight:700;color:var(--fg)" : "color:var(--mut)"}`,
+    el.append(h("a", { href: "#", "aria-current": getLang() === code ? "true" : "false",
       onclick: (e) => { e.preventDefault(); if (getLang() !== code) { setLang(code); renderChrome(); rerender(); } } }, label));
   }
 }

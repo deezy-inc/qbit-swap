@@ -11,6 +11,7 @@ import {
   slhDsaKeygen, slhDsaSign, compressedPub,
   p2mrSighash, serializeTx, P2MR_CONTROL_SINGLE_LEAF,
   btcSpend, addressToScriptPubKey,
+  htlcLeafQbit, p2mrSpk, htlcWitnessScript, p2wshSpk,   // for independent HTLC verification
 } from "@qbit-swap/client";
 
 const rand = (n) => globalThis.crypto.getRandomValues(new Uint8Array(n));
@@ -90,9 +91,31 @@ export class SwapClient {
 
   async #onView(v) {
     this.view = v;
+    // Independently re-derive the HTLC scripts from OUR keys + the counterparty pubkey + H + locktimes
+    // and confirm they match the coordinator's. If not, a derivation bug or tampering produced a script
+    // we don't control — HALT before any funds move.
+    if (v.htlc && !this.verifyHtlc(v)) { this.halted = true; this.onUpdate({ ...v, securityError: true }); return; }
     this.onUpdate(v);
+    if (this.halted) return;
     try { await this.#act(v); } catch (e) { this.onUpdate({ ...v, actionError: String(e.message || e) }); }
     if (v.state === "COMPLETE" || v.state === "REFUNDED") this.stop();
+  }
+  // Recompute both HTLC scriptPubKeys the way the coordinator must have, using our own real keys — a
+  // mismatch means the address we'd fund isn't the script we can claim/refund. (This binds our keys, H,
+  // and the locktimes into the scripts; it does not by itself authenticate the counterparty's pubkey.)
+  verifyHtlc(v) {
+    try {
+      if (!v.roles || !v.locktimes || !v.counterparty?.qbitPub || !v.counterparty?.btcPub || !v.H) return true;   // not enough yet
+      const H = bin(v.H), { fromLeg, toLeg } = v.roles;
+      const self = { qbit: this.qbit.pk, btc: compressedPub(this.btcPriv) };
+      const cp = { qbit: bin(v.counterparty.qbitPub), btc: bin(v.counterparty.btcPub) };
+      const pk = (role, coin) => (role === this.role ? self[coin] : cp[coin]);
+      const spk = (leg, claimRole, refundRole) => leg === "qbit"
+        ? hex(p2mrSpk(htlcLeafQbit(H, pk(claimRole, "qbit"), pk(refundRole, "qbit"), v.locktimes.qbit)))
+        : hex(p2wshSpk(htlcWitnessScript(H, pk(claimRole, "btc"), pk(refundRole, "btc"), v.locktimes.btc)));
+      // deriveHtlcs: fromLeg claim=participant(bob)/refund=initiator(alice); toLeg claim=alice/refund=bob
+      return spk(fromLeg, "bob", "alice") === v.htlc[fromLeg].spk && spk(toLeg, "alice", "bob") === v.htlc[toLeg].spk;
+    } catch { return false; }
   }
 
   // Which leg this party funds / claims / refunds, from the swap's role map.
