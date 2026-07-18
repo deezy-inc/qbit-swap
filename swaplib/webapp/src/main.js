@@ -8,6 +8,7 @@ import { t, getLang, setLang, LANGS } from "./i18n.js";
 
 const DEFAULT_COORD = globalThis.QBIT_COORDINATOR || "http://127.0.0.1:8787";
 const FAUCET = globalThis.QBIT_TRIAL_FAUCET || null;
+const ORDERBOOK = globalThis.QBIT_ORDERBOOK === true;   // feature flag, default OFF — peer-to-peer only
 const appEl = document.getElementById("app");
 const vault = new Vault();
 let rerender = () => init();     // re-invoked on language change to redraw the current screen
@@ -88,7 +89,8 @@ async function init() {
 function chooseDirection(direction) {
   flow.direction = direction;
   flow.btcSats = 100000000; flow.qbtSats = 500000000;
-  showMarket(direction);
+  if (ORDERBOOK) return showMarket(direction);   // order book (flagged); otherwise go straight to peer-to-peer
+  flow.mode = "create"; stepConfirm();
 }
 
 // ── market view: the order-book side relevant to the chosen direction + a peer option ─────────
@@ -178,7 +180,7 @@ function stepConfirm() {
       h("p", { class: "note" }, t("confirmP2")),
       h("p", { class: "note" }, t("confirmP3")),
     ],
-    cta: t("confirmCta"), onCta: () => stepAmount(), back: () => showMarket(flow.direction),
+    cta: t("confirmCta"), onCta: () => stepAmount(), back: () => (ORDERBOOK ? showMarket(flow.direction) : init()),
   }));
 }
 

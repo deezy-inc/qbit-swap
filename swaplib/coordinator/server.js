@@ -99,7 +99,7 @@ async function watchTick() {
 // and the coordinator broadcasts from the mempool; the wallet is only for funding *detection*.)
 const SETTLE_GRACE_MS = Number(process.env.WATCH_SETTLE_GRACE_MS || 86400000);   // 24h
 async function cleanupWatch() {
-  if (btc.backend !== "rpc") return;
+  if (btc.backend !== "rpc" || btc.watch !== "wallet") return;   // only the watch-only-wallet path accumulates descriptors
   const now = Date.now();
   const keep = allSwaps().filter((s) => s.htlc?.btc?.spk && (
     !["COMPLETE", "REFUNDED", "ABORTED"].includes(s.state) ||   // active OR still in the recovery window

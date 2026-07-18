@@ -34,9 +34,15 @@ Each chain picks a backend via `<CHAIN>_BACKEND` (falls back to `COORD_CHAIN`, t
   (empty = local). This is the regtest-lab transport; `findOutput` uses `scantxoutset` (fine only on a
   tiny regtest UTXO set).
 - **`rpc`** — JSON-RPC over HTTP; set `<CHAIN>_RPC_URL` (e.g. `http://user:pass@host:port`). Funding
-  watch uses a **forward-only watch-only wallet** (`importdescriptors timestamp:"now"` + `listunspent`),
-  never `scantxoutset` — so it works against a **pruned** Bitcoin node (`getTx` reads via the wallet, no
-  `txindex`). A background job rotates the wallet to drop settled swaps' descriptors so it can't balloon
+  watch method is per-chain via `<CHAIN>_WATCH` (default: BTC `wallet`, QBT `scan`):
+  - `wallet` (Bitcoin default) — a **forward-only watch-only wallet** (`importdescriptors timestamp:"now"`
+    + `listunspent`), never `scantxoutset`, so it works against a **pruned** Bitcoin node (`getTx` reads
+    via the wallet, no `txindex`).
+  - `scan` (Qbit default) — `scantxoutset`, which is cheap on a small UTXO set (Qbit's young chain) and
+    avoids depending on wallet tracking of `p2mr` (witness-v2) descriptors. A full (unpruned) qbitd is
+    cheap anyway since the whole chain is small.
+  The wallet path runs a background job that rotates the wallet to drop settled swaps' descriptors so it
+  can't balloon
   — **count-driven, not time-driven**: it only rotates once `WATCH_PRUNE_THRESHOLD` (default 500) stale
   descriptors have amortized (a few hundred is harmless), checked every `WATCH_CLEANUP_MS` (default 6h).
   A descriptor is kept while its swap is non-terminal (the **whole recovery/refund window**, which may be

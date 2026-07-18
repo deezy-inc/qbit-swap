@@ -45,7 +45,9 @@ async function esplora(path, opts = {}, attempt = 0) {
 const scripthash = (spkHex) => bytesToHex(sha256(hexToBytes(spkHex)).reverse());   // Esplora address index key
 
 export class Chain {
-  constructor(name) { this.name = name; this.backend = backendOf(name); }
+  // watch method for the rpc backend: "wallet" (watch-only import — mainnet-safe, needed for Bitcoin)
+  // or "scan" (scantxoutset — fine on a small UTXO set like Qbit's, and no p2mr-descriptor dependency).
+  constructor(name) { this.name = name; this.backend = backendOf(name); this.watch = env(`${name.toUpperCase()}_WATCH`, name === "btc" ? "wallet" : "scan"); }
 
   // ── dev/rpc transport ────────────────────────────────────────────────────────
   async rpc(...args) { return this.backend === "rpc" ? this.#jsonRpc(this.#coerce(args)) : this.#cli(this.#coerce(args)); }
@@ -89,12 +91,13 @@ export class Chain {
       const u = (utxos || []).find((x) => x.status?.confirmed);
       return u ? { txid: u.txid, vout: u.vout, amountSats: u.value, height: u.status.block_height } : null;
     }
-    if (this.backend === "rpc") {
+    if (this.backend === "rpc" && this.watch === "wallet") {
       const wallet = await this.#ensureWatched(spkHex);
       const utxos = await this.rpcWallet(wallet, "listunspent", 0, 9999999, "[]", true);
       const u = (utxos || []).find((x) => x.scriptPubKey === spkHex && x.confirmations > 0);
       return u ? { txid: u.txid, vout: u.vout, amountSats: Math.round(u.amount * 1e8), height: (await this.height()) - u.confirmations + 1 } : null;
     }
+    // dev, or rpc with watch=scan (e.g. Qbit): scantxoutset — cheap on a small/regtest UTXO set.
     const scan = await this.rpc("scantxoutset", "start", JSON.stringify([`raw(${spkHex})`]));
     const u = (scan.unspents || [])[0];
     return u ? { txid: u.txid, vout: u.vout, amountSats: Math.round(u.amount * 1e8), height: u.height } : null;
@@ -122,7 +125,7 @@ export class Chain {
   // old wallet. Safe on a pruned node: kept addresses re-import forward-only, and a funded leg no
   // longer needs the wallet (spent-detection is gettxout on the UTXO set; its outpoint is recorded).
   async pruneWatch(keepSpks, threshold = Number(env("WATCH_PRUNE_THRESHOLD", 500))) {
-    if (this.backend !== "rpc" || !this._watched) return;
+    if (this.backend !== "rpc" || this.watch !== "wallet" || !this._watched) return;
     const keep = new Set(keepSpks);
     // Count-driven, not time-driven: let settled descriptors amortize, then rotate once. A wallet with
     // a few hundred stale descriptors is harmless, so there's no rush — this is unrelated to block time.
