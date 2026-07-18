@@ -73,39 +73,56 @@ async function init() {
   const q = parseHash();
   if (q.coord && q.id && q.token) return startParticipant({ coordinator: decodeURIComponent(q.coord), id: q.id, token: q.token });
   const resumable = await vault.list().catch(() => []);
-  const book = await coordGet("/offers").catch(() => ({ asks: [], bids: [] }));
   render(h("div", {},
-    orderBookCard(book),
-    h("div", { class: "card", style: "text-align:center" }, h("a", { href: "#", onclick: (e) => { e.preventDefault(); showCreate(); } }, t("startOwn"))),
+    screen({
+      title: t("swapWhichWay"), subtitle: t("nonCustodial"),
+      body: [
+        bigChoice(t("haveBtc"), t("haveBtcSub"), () => chooseDirection("btc2qbt")),
+        bigChoice(t("haveQbt"), t("haveQbtSub"), () => chooseDirection("qbt2btc")),
+      ],
+    }),
     await recoverCard(resumable),
   ));
-  scheduleBookRefresh();
 }
 
-// ── order book ────────────────────────────────────────────────────────────────
-function orderBookCard(book) {
-  const card = h("div", { class: "card", id: "orderbook" },
-    h("div", { style: "display:flex;justify-content:space-between;align-items:center" }, h("h2", { style: "margin:0" }, t("orderBook")),
-      h("button", { class: "copy", onclick: () => init() }, t("refreshBook"))));
-  const section = (label, offers, action) => h("div", {},
-    h("h3", { style: "font-size:12px;color:var(--mut);text-transform:uppercase;letter-spacing:.5px;margin:14px 0 2px" }, label),
-    ...(offers.length ? offers.map((o) => offerRow(o, action)) : [h("p", { class: "note" }, t("noOffers"))]));
-  card.append(section(t("buyQbt"), book.asks || [], "buy"), section(t("sellQbt"), book.bids || [], "sell"));
-  return card;
+function chooseDirection(direction) {
+  flow.direction = direction;
+  flow.btcSats = 100000000; flow.qbtSats = 500000000;
+  showMarket(direction);
+}
+
+// ── market view: the order-book side relevant to the chosen direction + a peer option ─────────
+// btc->qbt = buy QBT (take asks); qbt->btc = sell QBT (take bids).
+async function showMarket(direction) {
+  rerender = () => showMarket(direction);
+  const action = direction === "btc2qbt" ? "buy" : "sell";
+  render(h("div", {},
+    marketCard(direction, action, { asks: [], bids: [] }),
+    h("div", { class: "card", style: "text-align:center" }, h("button", { class: "primary", style: "width:100%", onclick: () => startPeer() }, t("tradePeer")))));
+  refreshMarket(direction, action);
+  scheduleMarketRefresh(direction, action);
+}
+function marketCard(direction, action, book) {
+  const offers = action === "buy" ? book.asks : book.bids;
+  return h("div", { class: "card", id: "market" },
+    h("div", { style: "display:flex;justify-content:space-between;align-items:center" },
+      h("h2", { style: "margin:0" }, action === "buy" ? t("buyQbt") : t("sellQbt")),
+      h("button", { class: "copy", onclick: () => refreshMarket(direction, action) }, t("refreshBook"))),
+    ...(offers && offers.length ? offers.map((o) => offerRow(o, action)) : [h("p", { class: "note", style: "margin-top:10px" }, t("noOffers"))]),
+    h("div", { style: "margin-top:14px" }, h("a", { href: "#", style: "color:var(--mut)", onclick: (e) => { e.preventDefault(); init(); } }, t("back"))));
+}
+async function refreshMarket(direction, action) {
+  try { const book = await coordGet("/offers"); const el = document.getElementById("market"); if (el) el.replaceWith(marketCard(direction, action, book)); } catch {}
+}
+function scheduleMarketRefresh(direction, action) {
+  clearInterval(window._bookTimer);
+  window._bookTimer = setInterval(() => { if (!document.getElementById("market")) return clearInterval(window._bookTimer); refreshMarket(direction, action); }, 6000);
 }
 function offerRow(o, action) {
   const btn = h("button", { class: "primary", style: "padding:6px 16px", onclick: () => takeAndStart(o, action) }, action === "buy" ? t("buyBtn") : t("sellBtn"));
   return h("div", { style: "display:flex;align-items:center;justify-content:space-between;gap:10px;padding:9px 0;border-top:1px solid var(--line)" },
     h("div", {}, h("span", { style: "font-weight:600" }, `${sats(o.qbtSats)} QBT`), h("span", { class: "note", style: "margin-left:10px" }, `${o.price.toFixed(4)} ${t("perQbt")}`)),
     h("div", { style: "display:flex;align-items:center;gap:14px" }, h("span", { class: "note" }, `${sats(o.btcSats)} BTC`), btn));
-}
-function scheduleBookRefresh() {
-  clearInterval(window._bookTimer);
-  window._bookTimer = setInterval(async () => {
-    const el = document.getElementById("orderbook");
-    if (!el) return clearInterval(window._bookTimer);          // left the landing
-    try { const book = await coordGet("/offers"); const fresh = orderBookCard(book); el.replaceWith(fresh); } catch {}
-  }, 6000);
 }
 async function takeAndStart(o, action) {
   try {
@@ -115,7 +132,7 @@ async function takeAndStart(o, action) {
     flow.btcSats = take.terms.btcSats; flow.qbtSats = take.terms.qbtSats;
     flow.takeSwapId = take.swapId; flow.takeToken = take.takerToken; flow.receiveAddr = ""; flow.refundAddr = "";
     stepTakeConfirm();
-  } catch (e) { alert(e.message); }
+  } catch (e) { alert(e.message); refreshMarket(flow.direction, action); }   // e.g. someone else took it
 }
 function stepTakeConfirm() {
   rerender = stepTakeConfirm;
@@ -124,7 +141,7 @@ function stepTakeConfirm() {
     title: flow.takeAction === "buy" ? t("buyQbt") : t("sellQbt"),
     body: [h("div", { class: "fund" }, h("div", { style: "font-size:16px;font-weight:600" }, summary)), h("p", { class: "note" }, t("confirmP3"))],
     cta: t("continue"), onCta: () => stepReceive(),
-    back: () => init(),
+    back: () => showMarket(flow.direction),
   }));
 }
 async function doTake() {
@@ -133,18 +150,11 @@ async function doTake() {
   await vault.save(flow.client.secrets());
   stepBackup(() => startLive());
 }
-
-// The peer-to-peer create flow (reached via "start your own swap").
-function showCreate() {
-  rerender = showCreate;
-  render(screen({
-    title: t("swapWhichWay"), subtitle: t("nonCustodial"),
-    body: [
-      bigChoice(t("haveBtc"), t("haveBtcSub"), () => chooseDirection("btc2qbt")),
-      bigChoice(t("haveQbt"), t("haveQbtSub"), () => chooseDirection("qbt2btc")),
-    ],
-    back: () => init(),
-  }));
+// Trade directly with a peer (create a private swap + share a link) for the chosen direction.
+function startPeer() {
+  clearInterval(window._bookTimer);
+  flow.mode = "create";
+  stepConfirm();
 }
 
 async function recoverCard(ids) {
@@ -158,12 +168,6 @@ async function recoverCard(ids) {
   return card;
 }
 
-function chooseDirection(direction) {
-  flow.mode = "create"; flow.direction = direction;
-  flow.btcSats = 100000000; flow.qbtSats = 500000000;
-  stepConfirm();
-}
-
 function stepConfirm() {
   rerender = stepConfirm;
   const d = DIR[flow.direction];
@@ -174,7 +178,7 @@ function stepConfirm() {
       h("p", { class: "note" }, t("confirmP2")),
       h("p", { class: "note" }, t("confirmP3")),
     ],
-    cta: t("confirmCta"), onCta: () => stepAmount(), back: () => init(),
+    cta: t("confirmCta"), onCta: () => stepAmount(), back: () => showMarket(flow.direction),
   }));
 }
 

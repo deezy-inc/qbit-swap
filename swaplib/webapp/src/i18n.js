@@ -75,7 +75,7 @@ const en = {
   orderBook: "Order book", buyQbt: "Buy QBT", sellQbt: "Sell QBT",
   colLot: "Lot", colPrice: "Price", colTotal: "Total", buyBtn: "Buy", sellBtn: "Sell",
   noOffers: "No open offers right now — check back soon, or start your own swap below.",
-  refreshBook: "Refresh", startOwn: "Or start your own peer-to-peer swap",
+  refreshBook: "Refresh", startOwn: "Or start your own peer-to-peer swap", tradePeer: "Trade directly with a peer",
   buyingSummary: "You buy {qbt} QBT for {btc} BTC", sellingSummary: "You sell {qbt} QBT for {btc} BTC",
   buyNow: "Buy now", sellNow: "Sell now", perQbt: "BTC/QBT",
 };
@@ -147,7 +147,7 @@ const zh = {
   orderBook: "订单簿", buyQbt: "买入 QBT", sellQbt: "卖出 QBT",
   colLot: "数量", colPrice: "价格", colTotal: "总额", buyBtn: "买入", sellBtn: "卖出",
   noOffers: "暂无挂单——请稍后再来，或在下方发起您自己的兑换。",
-  refreshBook: "刷新", startOwn: "或发起您自己的点对点兑换",
+  refreshBook: "刷新", startOwn: "或发起您自己的点对点兑换", tradePeer: "直接与对手方交易",
   buyingSummary: "您用 {btc} BTC 买入 {qbt} QBT", sellingSummary: "您卖出 {qbt} QBT 换取 {btc} BTC",
   buyNow: "立即买入", sellNow: "立即卖出", perQbt: "BTC/QBT",
 };

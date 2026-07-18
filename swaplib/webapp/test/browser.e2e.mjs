@@ -18,7 +18,8 @@ async function runDirection(browser, choiceText, label) {
   console.log(`\n[${label}]`);
   const ctx = await browser.newContext();
   const A = await ctx.newPage(); await A.goto(URL);
-  await A.getByText(choiceText).click();                       // 1: direction (the only decision here)
+  await A.getByText(choiceText).click();                       // 1: direction
+  await A.getByRole("button", { name: "Trade directly with a peer" }).click({ timeout: 20000 }); // 1a: market -> peer
   await A.getByRole("button", { name: /agreed a trade/ }).click({ timeout: 20000 }); // 1b: confirm counterparty
   await clickBtn(A, "Continue");                               // 2: amount
   await addrFilled(A); await clickBtn(A, "Continue");          // 3: receive address
