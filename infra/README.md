@@ -59,8 +59,26 @@ Auth keys, RPC passwords, and the tunnel/github tokens are passed as Terraform v
 Moving these to SSM Parameter Store / Secrets Manager is a reasonable follow-up. `.tfvars` and state are
 gitignored (`infra/.gitignore`).
 
+## Admin dashboard (tailnet-only)
+
+The app box also runs a **read-only monitoring dashboard** in the coordinator process
+(`swaplib/coordinator/admin.js`). It's a live window into the swap store: overview counts, chain
+heights/backends, a filterable table of every swap (state, amounts, funding, party presence,
+watchtower-armed status), the order book, and an SSE activity feed. It reads the live in-memory store
+directly (no DB polling) and exposes **no mutation endpoints**; capability tokens are redacted.
+
+It is **not** routed through the Cloudflare Tunnel — reach it over the tailnet:
+
+```
+http://<tailscale_hostname>:8790/?token=<admin_token>
+```
+
+The port opens no public inbound (the security group stays closed); only tailnet peers reach it, and
+the `admin_token` gates every API/SSE call. Set the tunnel route to `:8080` **only** — never `:8790`.
+
 ## Operating
 
 - App: `journalctl -u qbit-swap -f`  ·  init log `/var/log/qbit-init.log`  ·  health `curl -s http://127.0.0.1:8080/healthz`
+- Dashboard: `http://<host>:8790/?token=<admin_token>` over the tailnet
 - Node: `docker logs -f qbitd`  ·  init log `/var/log/qbit-node-init.log`
 - SSH: over the tailnet as `ubuntu` with the injected key (no public SSH unless you set `ssh_ingress_cidrs`).

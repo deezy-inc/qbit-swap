@@ -47,7 +47,7 @@ variable "tailscale_hostname" {
 # ── qbitd ───────────────────────────────────────────────────────────────────────────────────────
 variable "qbitd_image" {
   type        = string
-  description = "Docker image holding the (patched) qbitd/qbit-cli build, e.g. your qbitbuild image. Empty = cloud-init installs Docker but does NOT start qbitd (finish by hand)."
+  description = "Docker image with a STOCK qbitd/qbit-cli build. The p2mr signing patch (node-patches/) is NOT needed — the keyless coordinator only uses scantxoutset, getconfirmationtarget, and broadcast. Empty = cloud-init installs Docker but does NOT start qbitd (finish by hand)."
   default     = ""
 }
 

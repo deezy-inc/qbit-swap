@@ -4,9 +4,9 @@
 ssh_public_key    = "ssh-ed25519 AAAA... you@host"
 tailscale_authkey = "tskey-auth-..."
 
-# The Docker image that contains your patched qbitd/qbit-cli build (same one the lab uses).
-# Leave empty to install Docker only and start qbitd by hand.
-qbitd_image     = "your-registry/qbitbuild:latest"
+# Docker image with a STOCK qbitd build. No p2mr signing patch needed — the coordinator is keyless
+# (scantxoutset + getconfirmationtarget + broadcast only). Leave empty to install Docker + start by hand.
+qbitd_image     = "your-registry/qbitd:latest"
 qbitd_bin       = "/src/build/bin/qbitd"
 qbitd_chain_arg = "-testnet4"          # -regtest | -testnet4 | "" for mainnet
 

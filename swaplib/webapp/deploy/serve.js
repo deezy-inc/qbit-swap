@@ -15,6 +15,7 @@ import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { dirname, join, extname } from "node:path";
 import { startServer } from "../../coordinator/server.js";
+import { startAdmin } from "../../coordinator/admin.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const PUBLIC_URL = (process.env.PUBLIC_URL || "http://127.0.0.1:8080").replace(/\/$/, "");
@@ -62,6 +63,8 @@ function unified() {
 async function main() {
   await startServer(COORD);
   await unified();
+  // Admin dashboard — tailnet-only (NOT routed through the public tunnel). Off if ADMIN=off.
+  if (process.env.ADMIN !== "off") await startAdmin(Number(process.env.ADMIN_PORT || 8790));
   console.log(`\n  qbit-swap is live`);
   console.log(`  ┌──────────────────────────────────────────────────────────────`);
   console.log(`  │  Public URL:  ${PUBLIC_URL}   (front this ${BIND}:${WEB} with a tunnel)`);

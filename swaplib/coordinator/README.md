@@ -13,7 +13,20 @@ headless market-maker **bot** drive it through the same HTTP API.
 - `swap.js` — swap store + Tier-Nolan state machine
   (`CREATED→READY→BTC_FUNDED→QBT_FUNDED→MATURING→CLAIMABLE→CLAIMED→COMPLETE`, plus `REFUNDED`/`ABORTED`).
 - `server.js` — HTTP/JSON API + a chain-watcher loop; auth via a per-party capability token.
+- `admin.js` — **read-only monitoring dashboard** (see below).
 - `demo.js` — two headless bots run a full swap through the API, signing client-side with `../js`.
+
+## Admin dashboard (`admin.js`)
+A separate in-process HTTP server (`startAdmin(port)`, default `8790`) that gives the operator a live
+view of the store — overview counts, chain heights/backends, a filterable table of every swap (state,
+amounts, funding, party presence, watchtower-armed status), the order book, and an SSE activity feed.
+It reads the live in-memory store directly (no DB polling; global `subscribeAll` drives the feed),
+exposes **no mutation endpoints**, and **redacts capability tokens**. Gated by `ADMIN_TOKEN`
+(`?token=` or `X-Admin-Token`; a random one is generated + logged if unset). `serve.js`/`trial.js` start
+it automatically unless `ADMIN=off`. It is meant to be reached over a private network (e.g. the tailnet),
+never exposed publicly — bind with `ADMIN_BIND` and keep it off any public reverse proxy.
+- `GET /` dashboard · `GET /api/overview` · `GET /api/swaps[?state=]` · `GET /api/swaps/:id` ·
+  `GET /api/offers` · `GET /stream` (SSE)
 
 ## API (auth: `X-Swap-Token`, header or `?token=`)
 - `POST /swaps` → `{ id, tokens: { alice, bob } }` (Alice shares Bob's token as his link)

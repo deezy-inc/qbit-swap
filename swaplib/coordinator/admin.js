@@ -1,0 +1,297 @@
+// Admin dashboard for the keyless coordinator — a read-only window into the swap store, order book,
+// and chain state, with a live feed. Runs IN-PROCESS with the coordinator so it reads the live
+// in-memory store directly (no DB polling). It is NOT routed through the public Cloudflare Tunnel;
+// bind it for the tailnet (ADMIN_BIND, default 0.0.0.0 behind a closed security group) and gate it
+// with ADMIN_TOKEN. Read-only: it exposes no mutation endpoints and redacts capability tokens.
+import http from "node:http";
+import { randomBytes } from "node:crypto";
+import { allSwaps, isOnline, subscribeAll } from "./swap.js";
+import { allOffers } from "./offers.js";
+import { qbit, btc } from "./chain.js";
+
+const TERMINAL = ["COMPLETE", "REFUNDED", "ABORTED"];
+const active = (s) => !TERMINAL.includes(s.state);
+
+// ── redacted projections (never leak tokens / raw signed tx bundles) ──────────────────────────
+function summary(s) {
+  return {
+    id: s.id, direction: s.terms?.direction, state: s.state,
+    createdAt: s.createdAt || null, settledAt: s.settledAt || null,
+    btcSats: s.terms?.btcSats, qbtSats: s.terms?.qbtSats,
+    fromLeg: s.roles?.fromLeg, toLeg: s.roles?.toLeg,
+    funded: { btc: !!s.funding?.btc, qbit: !!s.funding?.qbit },
+    spent: { btc: !!s.funding?.btc?.spent, qbit: !!s.funding?.qbit?.spent },
+    joined: { alice: !!s.party?.alice, bob: !!s.party?.bob },
+    online: { alice: isOnline(s, "alice"), bob: isOnline(s, "bob") },
+    armed: { alice: !!s.finish?.alice, bob: !!s.finish?.bob }, // watchtower pre-signed
+    preimage: !!s.preimage,
+    short: s.shortFunded || null,
+  };
+}
+function detail(s) {
+  return {
+    ...summary(s),
+    terms: s.terms, roles: s.roles, locktimes: s.locktimes, confsTarget: s.confsTarget,
+    htlc: { btc: s.htlc?.btc?.address || null, qbit: s.htlc?.qbit?.address || null },
+    funding: s.funding, heights: s.heights, refund: s.refund,
+    broadcasts: s.broadcasts, wt: s.wt || null,
+    party: {
+      alice: s.party?.alice ? { btcPub: s.party.alice.btcPub, qbitPub: s.party.alice.qbitPub, btcDest: s.party.alice.btcDest, qbitDest: s.party.alice.qbitDest } : null,
+      bob: s.party?.bob ? { btcPub: s.party.bob.btcPub, qbitPub: s.party.bob.qbitPub, btcDest: s.party.bob.btcDest, qbitDest: s.party.bob.qbitDest } : null,
+    },
+  };
+}
+
+async function chainInfo(c) {
+  try { return { backend: c.backend, watch: c.watch, height: await c.height(), ok: true }; }
+  catch (e) { return { backend: c.backend, watch: c.watch, height: null, ok: false, error: String(e.message || e) }; }
+}
+
+async function overview() {
+  const swaps = allSwaps();
+  const counts = {};
+  let onlineSwaps = 0, volBtc = 0, volQbt = 0;
+  for (const s of swaps) {
+    counts[s.state] = (counts[s.state] || 0) + 1;
+    if (isOnline(s, "alice") || isOnline(s, "bob")) onlineSwaps++;
+    if (s.state === "COMPLETE") { volBtc += s.terms?.btcSats || 0; volQbt += s.terms?.qbtSats || 0; }
+  }
+  const offers = allOffers();
+  const offerCounts = offers.reduce((a, o) => ((a[o.status] = (a[o.status] || 0) + 1), a), {});
+  const [b, q] = await Promise.all([chainInfo(btc), chainInfo(qbit)]);
+  return {
+    now: Date.now(), network: process.env.NETWORK || "regtest",
+    chains: { btc: b, qbit: q },
+    counts,
+    totals: {
+      swaps: swaps.length,
+      active: swaps.filter(active).length,
+      complete: counts.COMPLETE || 0,
+      refunded: (counts.REFUNDED || 0) + (counts.ABORTED || 0),
+      onlineSwaps,
+    },
+    volume: { btcSats: volBtc, qbtSats: volQbt },
+    offers: { total: offers.length, ...offerCounts },
+  };
+}
+
+// ── server ────────────────────────────────────────────────────────────────────────────────────
+const json = (res, code, body) => { res.writeHead(code, { "content-type": "application/json" }); res.end(JSON.stringify(body)); };
+
+export function startAdmin(port = Number(process.env.ADMIN_PORT || 8790), opts = {}) {
+  const bind = opts.bind || process.env.ADMIN_BIND || "0.0.0.0";
+  const TOKEN = opts.token || process.env.ADMIN_TOKEN || randomBytes(24).toString("hex");
+  const authed = (req, url) => {
+    const t = req.headers["x-admin-token"] || url.searchParams.get("token") || "";
+    return t && t === TOKEN;
+  };
+
+  const server = http.createServer(async (req, res) => {
+    const url = new URL(req.url, "http://x");
+    const p = url.pathname;
+    try {
+      if (p === "/" || p === "/index.html") { res.writeHead(200, { "content-type": "text/html" }); return res.end(PAGE); }
+      // everything under /api requires the token
+      if (p.startsWith("/api/") || p === "/stream") {
+        if (!authed(req, url)) return json(res, 401, { error: "admin token required (?token= or X-Admin-Token)" });
+      }
+      if (p === "/api/overview") return json(res, 200, await overview());
+      if (p === "/api/swaps") {
+        const st = url.searchParams.get("state");
+        let list = allSwaps().map(summary);
+        if (st) list = list.filter((s) => s.state === st);
+        list.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+        return json(res, 200, list);
+      }
+      if (p.startsWith("/api/swaps/")) {
+        const id = p.slice("/api/swaps/".length);
+        const s = allSwaps().find((x) => x.id === id);
+        return s ? json(res, 200, detail(s)) : json(res, 404, { error: "no such swap" });
+      }
+      if (p === "/api/offers") return json(res, 200, allOffers());
+      if (p === "/stream") {
+        res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
+        res.write(": connected\n\n"); // immediate flush so EventSource fires onopen right away
+        const send = (s) => res.write(`data: ${JSON.stringify(summary(s))}\n\n`);
+        const unsub = subscribeAll(send);
+        const hb = setInterval(() => res.write(": ping\n\n"), 25_000);
+        req.on("close", () => { clearInterval(hb); unsub(); });
+        return;
+      }
+      return json(res, 404, { error: "not found" });
+    } catch (e) { return json(res, 500, { error: String(e.message || e) }); }
+  });
+
+  return new Promise((resolve) => server.listen(port, bind, () => {
+    console.log(`  admin dashboard: http://${bind === "0.0.0.0" ? "<tailnet-host>" : bind}:${port}/?token=${TOKEN}`);
+    if (!process.env.ADMIN_TOKEN && !opts.token) console.log(`  (ADMIN_TOKEN not set — generated the ephemeral token above; set ADMIN_TOKEN to keep it stable)`);
+    resolve(server);
+  }));
+}
+
+if (import.meta.url === `file://${process.argv[1]}`) startAdmin();
+
+// ── single-file dashboard ───────────────────────────────────────────────────────────────────
+const PAGE = `<!doctype html><html lang="en"><head><meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/><title>qbit-swap · admin</title>
+<style>
+:root{--bg:#0b0e14;--surface:#131722;--surface2:#1a1f2e;--line:#242b3d;--ink:#f3f5fb;--dim:#8b95ad;--accent:#6b93ff;--good:#3fd98b;--warn:#f4c14e;--bad:#ff6b6b;}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.5 ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+code,.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+header{display:flex;align-items:center;gap:14px;padding:14px 20px;border-bottom:1px solid var(--line);position:sticky;top:0;background:rgba(11,14,20,.9);backdrop-filter:blur(6px);z-index:5}
+header h1{font-size:15px;margin:0;font-weight:600;letter-spacing:.2px}
+.pill{font-size:12px;color:var(--dim);border:1px solid var(--line);border-radius:999px;padding:3px 10px}
+.live{margin-left:auto;display:flex;align-items:center;gap:7px;font-size:12px;color:var(--dim)}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--dim);display:inline-block}
+.dot.on{background:var(--good);box-shadow:0 0 0 3px rgba(63,217,139,.15)}
+.dot.off{background:var(--line)}
+main{padding:20px;max-width:1240px;margin:0 auto}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin-bottom:8px}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+.card .k{font-size:12px;color:var(--dim);margin-bottom:4px}.card .v{font-size:22px;font-weight:600}
+.card .v small{font-size:12px;color:var(--dim);font-weight:400}
+.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:18px 0 10px}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+.chip{font-size:12px;padding:3px 9px;border-radius:999px;border:1px solid var(--line);background:var(--surface2);color:var(--dim);cursor:pointer}
+.chip.sel{border-color:var(--accent);color:var(--ink)}
+input.search{margin-left:auto;background:var(--surface);border:1px solid var(--line);color:var(--ink);border-radius:8px;padding:7px 11px;font-size:13px;min-width:190px}
+table{width:100%;border-collapse:collapse;background:var(--surface);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--line);font-size:13px;white-space:nowrap}
+th{color:var(--dim);font-weight:500;font-size:12px;background:var(--surface2)}
+tbody tr{cursor:pointer}tbody tr:hover{background:var(--surface2)}
+td.wrap{white-space:normal}
+.badge{font-size:11px;padding:2px 8px;border-radius:6px;font-weight:600;letter-spacing:.2px}
+.b-created{background:#243049;color:#9db4ff}.b-fund{background:#2a2740;color:#c3b4ff}
+.b-mature{background:#3a3320;color:var(--warn)}.b-claim{background:#123227;color:var(--good)}
+.b-complete{background:#0f3325;color:var(--good)}.b-refund{background:#3a2222;color:var(--bad)}
+.dots{display:inline-flex;gap:4px}
+.mut{color:var(--dim)}
+.flash{animation:fl 1.2s ease}@keyframes fl{from{background:rgba(107,147,255,.22)}to{background:transparent}}
+#log{margin-top:20px}.logline{font-size:12px;color:var(--dim);padding:4px 2px;border-bottom:1px solid var(--line)}
+.logline b{color:var(--ink);font-weight:600}
+dialog{background:var(--surface);color:var(--ink);border:1px solid var(--line);border-radius:14px;max-width:760px;width:92%;padding:0}
+dialog::backdrop{background:rgba(0,0,0,.6)}
+.dhead{display:flex;align-items:center;gap:10px;padding:14px 18px;border-bottom:1px solid var(--line)}
+.dhead .x{margin-left:auto;cursor:pointer;color:var(--dim);font-size:20px;line-height:1;background:none;border:none}
+pre{margin:0;padding:16px 18px;overflow:auto;max-height:64vh;font-size:12px;color:#cdd6f4}
+.empty{padding:30px;text-align:center;color:var(--dim)}
+.gate{max-width:360px;margin:12vh auto;text-align:center}
+.gate input{width:100%;margin:12px 0;background:var(--surface);border:1px solid var(--line);color:var(--ink);border-radius:8px;padding:10px}
+.gate button{background:var(--accent);border:none;color:#0b0e14;font-weight:600;border-radius:8px;padding:9px 18px;cursor:pointer}
+a{color:var(--accent)}
+</style></head><body>
+<header>
+  <h1>qbit-swap <span class="mut">· admin</span></h1>
+  <span class="pill" id="net">—</span>
+  <span class="pill" id="btcp">BTC —</span>
+  <span class="pill" id="qbtp">QBT —</span>
+  <span class="live"><span class="dot" id="livedot"></span><span id="livetxt">connecting…</span></span>
+</header>
+<main id="app"><div class="empty">loading…</div></main>
+
+<dialog id="dlg"><div class="dhead"><strong id="dtitle" class="mono"></strong><button class="x" onclick="dlg.close()">×</button></div><pre id="dbody"></pre></dialog>
+
+<script>
+const $=(s,r=document)=>r.querySelector(s);
+let TOKEN=new URLSearchParams(location.search).get("token")||sessionStorage.getItem("qadm")||"";
+const H=()=>({"x-admin-token":TOKEN});
+const api=(p)=>fetch(p,{headers:H()}).then(r=>{if(r.status===401)throw new Error("401");return r.json()});
+const short=(id)=>id?id.slice(0,8):"—";
+const sat=(n)=>n==null?"—":(n>=1e5?(n/1e8).toFixed(n%1e8?4:0)+" ":"")+(n>=1e5?"":n+" sat");
+const btc=(n)=>n==null?"—":(n/1e8).toFixed(8).replace(/0+$/,"").replace(/\\.$/,"")+" BTC";
+const qbt=(n)=>n==null?"—":(n/1e8).toFixed(8).replace(/0+$/,"").replace(/\\.$/,"")+" QBT";
+const ago=(t)=>{if(!t)return"—";const s=(Date.now()-t)/1e3;if(s<60)return Math.floor(s)+"s";if(s<3600)return Math.floor(s/60)+"m";if(s<86400)return Math.floor(s/3600)+"h";return Math.floor(s/86400)+"d"};
+const BADGE={CREATED:"b-created",READY:"b-created",FROM_FUNDED:"b-fund",TO_FUNDED:"b-fund",MATURING:"b-mature",CLAIMABLE:"b-claim",CLAIMED:"b-claim",COMPLETE:"b-complete",REFUNDED:"b-refund",ABORTED:"b-refund"};
+const badge=(st)=>'<span class="badge '+(BADGE[st]||"b-created")+'">'+st+'</span>';
+const dd=(on)=>'<span class="dot '+(on?"on":"off")+'"></span>';
+let SWAPS=new Map(), FILTER=null, Q="";
+
+function gate(){
+  $("#app").innerHTML='<div class="gate"><h2>admin token</h2><input id="tk" type="password" placeholder="paste ADMIN_TOKEN"/><br><button onclick="sv()">enter</button></div>';
+  window.sv=()=>{TOKEN=$("#tk").value.trim();sessionStorage.setItem("qadm",TOKEN);boot()};
+}
+async function boot(){
+  try{ await refreshOverview(); await refreshSwaps(); connectStream(); }
+  catch(e){ if(String(e.message).includes("401")) return gate(); $("#app").innerHTML='<div class="empty">error: '+e.message+'</div>'; }
+}
+async function refreshOverview(){
+  const o=await api("/api/overview");
+  $("#net").textContent=o.network;
+  const cp=(el,c,label)=>{const e=$(el);e.textContent=label+" "+(c.ok?("#"+c.height):"down")+" · "+c.backend;e.style.color=c.ok?"":"var(--bad)"};
+  cp("#btcp",o.chains.btc,"BTC");cp("#qbtp",o.chains.qbit,"QBT");
+  const t=o.totals;
+  const cards=[
+    ["swaps",t.swaps],["active",t.active],["complete",t.complete],["refunded",t.refunded],
+    ["parties online",t.onlineSwaps,"swaps"],
+    ["completed volume",btc(o.volume.btcSats)+" · "+qbt(o.volume.qbtSats),""],
+    ["offers",o.offers.total,(o.offers.open||0)+" open"],
+  ].map(([k,v,s])=>'<div class="card"><div class="k">'+k+'</div><div class="v">'+v+(s?' <small>'+s+'</small>':'')+'</div></div>').join("");
+  window._counts=o.counts;
+  renderShell(cards);
+}
+function renderShell(cards){
+  if($("#cards")){$("#cards").innerHTML=cards;renderChips();return;}
+  $("#app").innerHTML='<div class="cards" id="cards">'+cards+'</div>'
+    +'<div class="row"><div class="chips" id="chips"></div><input class="search" id="q" placeholder="filter by id / state"/></div>'
+    +'<table><thead><tr><th>id</th><th>dir</th><th>state</th><th>BTC</th><th>QBT</th><th>funded</th><th>parties</th><th>armed</th><th>age</th><th>settled</th></tr></thead><tbody id="rows"></tbody></table>'
+    +'<div id="log"><div class="row"><b>activity</b></div><div id="loglines"></div></div>';
+  $("#q").oninput=(e)=>{Q=e.target.value.trim().toLowerCase();renderRows()};
+  renderChips();
+}
+function renderChips(){
+  const c=window._counts||{};const states=Object.keys(c);
+  $("#chips").innerHTML='<span class="chip '+(FILTER?"":"sel")+'" onclick="setF(null)">all</span>'+
+    states.map(s=>'<span class="chip '+(FILTER===s?"sel":"")+'" onclick="setF(\\''+s+'\\')">'+s+' '+c[s]+'</span>').join("");
+}
+window.setF=(s)=>{FILTER=s;renderChips();renderRows()};
+async function refreshSwaps(){
+  const list=await api("/api/swaps");
+  SWAPS=new Map(list.map(s=>[s.id,s]));renderRows();
+}
+function rowHtml(s){
+  const dir=s.direction==="btc2qbt"?"BTC→QBT":"QBT→BTC";
+  const funded='<span class="dots" title="BTC / QBT funding">'+dd(s.funded.btc)+dd(s.funded.qbit)+'</span>';
+  const parties='<span class="dots" title="alice / bob online">'+dd(s.online.alice)+dd(s.online.bob)+'</span>';
+  const armed='<span class="dots" title="watchtower armed: alice / bob">'+dd(s.armed.alice)+dd(s.armed.bob)+'</span>';
+  return '<tr data-id="'+s.id+'" onclick="openSwap(\\''+s.id+'\\')"><td class="mono">'+short(s.id)+
+    (s.short?' <span title="short-funded" style="color:var(--bad)">⚠</span>':'')+'</td><td class="mut">'+dir+'</td><td>'+badge(s.state)+
+    '</td><td>'+btc(s.btcSats)+'</td><td>'+qbt(s.qbtSats)+'</td><td>'+funded+'</td><td>'+parties+'</td><td>'+armed+
+    '</td><td class="mut">'+ago(s.createdAt)+'</td><td class="mut">'+(s.settledAt?ago(s.settledAt)+" ago":"—")+'</td></tr>';
+}
+function renderRows(){
+  let list=[...SWAPS.values()];
+  if(FILTER)list=list.filter(s=>s.state===FILTER);
+  if(Q)list=list.filter(s=>s.id.toLowerCase().includes(Q)||s.state.toLowerCase().includes(Q)||(s.direction||"").includes(Q));
+  list.sort((a,b)=>(b.createdAt||0)-(a.createdAt||0));
+  const tb=$("#rows");if(!tb)return;
+  tb.innerHTML=list.length?list.map(rowHtml).join(""):'<tr><td colspan="10" class="empty">no swaps</td></tr>';
+}
+window.openSwap=async(id)=>{
+  $("#dtitle").textContent=id;$("#dbody").textContent="loading…";$("#dlg").showModal();
+  try{$("#dbody").textContent=JSON.stringify(await api("/api/swaps/"+id),null,2);}catch(e){$("#dbody").textContent="error: "+e.message;}
+};
+let logn=0;
+function logLine(s){
+  const box=$("#loglines");if(!box)return;
+  const dir=s.direction==="btc2qbt"?"BTC→QBT":"QBT→BTC";
+  const el=document.createElement("div");el.className="logline";
+  el.innerHTML='<span class="mono">'+new Date().toLocaleTimeString()+'</span> · <b>'+short(s.id)+'</b> '+dir+' → '+badge(s.state);
+  box.prepend(el);if(++logn>60)box.lastChild?.remove();
+}
+function connectStream(){
+  const es=new EventSource("/stream?token="+encodeURIComponent(TOKEN));
+  es.onopen=()=>{$("#livedot").className="dot on";$("#livetxt").textContent="live"};
+  es.onerror=()=>{$("#livedot").className="dot off";$("#livetxt").textContent="reconnecting…"};
+  es.onmessage=(e)=>{
+    const s=JSON.parse(e.data);const prev=SWAPS.get(s.id);
+    SWAPS.set(s.id,s);
+    if(!prev||prev.state!==s.state)logLine(s);
+    renderRows();
+    const tr=$('tr[data-id="'+s.id+'"]');if(tr){tr.classList.remove("flash");void tr.offsetWidth;tr.classList.add("flash")}
+    if(!prev)renderOverviewSoon();
+  };
+}
+let ovT;function renderOverviewSoon(){clearTimeout(ovT);ovT=setTimeout(()=>refreshOverview().catch(()=>{}),400);}
+setInterval(()=>refreshOverview().catch(()=>{}),8000); // heights + counts tick
+if(!TOKEN)gate();else boot();
+</script></body></html>`;

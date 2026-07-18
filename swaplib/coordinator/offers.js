@@ -29,6 +29,7 @@ export function createOffer({ giveCoin, giveSats, wantCoin, wantSats }) {
   return o;
 }
 export const getOffer = (id) => offers.get(id);
+export const allOffers = () => [...offers.values()];   // admin/monitoring: every offer, any status
 export const isMaker = (o, tok) => tok && tok === o.makerToken;
 
 const publicFields = (o) => ({ id: o.id, side: o.side, giveCoin: o.giveCoin, giveSats: o.giveSats, wantCoin: o.wantCoin, wantSats: o.wantSats, qbtSats: o.qbtSats, btcSats: o.btcSats, price: o.price, createdAt: o.createdAt });

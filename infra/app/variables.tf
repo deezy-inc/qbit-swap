@@ -130,3 +130,15 @@ variable "orderbook" {
   description = "Enable the maker/taker order book UI (default off = peer-to-peer only)."
   default     = false
 }
+
+# ── Admin dashboard (tailnet-only; NOT routed through the Cloudflare Tunnel) ──────────────────
+variable "admin_token" {
+  type        = string
+  description = "Token gating the read-only admin dashboard. Reach it over the tailnet at http://<host>:<admin_port>/?token=<this>."
+  sensitive   = true
+}
+
+variable "admin_port" {
+  type    = number
+  default = 8790
+}

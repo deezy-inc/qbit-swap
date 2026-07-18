@@ -12,6 +12,9 @@ public_url        = "https://swap.example.com"       # the tunnel's public hostn
 # --- Tailscale ---
 tailscale_authkey = "tskey-auth-..."                 # reusable/ephemeral key
 
+# --- Admin dashboard (tailnet-only monitor; reach at http://<host>:8790/?token=<this>) ---
+admin_token = "long-random-string"
+
 # --- network + chain nodes (over the tailnet) ---
 network      = "testnet"
 qbit_rpc_url = "http://lab:lab@swap-node:18332"  # the DEDICATED keyless swap qbitd (infra/qbit-node)

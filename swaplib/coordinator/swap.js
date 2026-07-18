@@ -50,8 +50,14 @@ export function subscribe(id, cb) {
   subs.get(id).add(cb);
   return () => subs.get(id)?.delete(cb);
 }
+// Global subscription: fires on ANY swap's change. Drives the admin dashboard's live feed.
+const allSubs = new Set();
+export function subscribeAll(cb) { allSubs.add(cb); return () => allSubs.delete(cb); }
 const sigOf = (s) => JSON.stringify({ st: s.state, f: s.funding, r: s.refund, p: s.preimage, b: s.broadcasts, fn: [!!s.finish?.alice, !!s.finish?.bob] });
-function emit(s) { for (const cb of subs.get(s.id) || []) { try { cb(s); } catch { /* dead listener */ } } }
+function emit(s) {
+  for (const cb of subs.get(s.id) || []) { try { cb(s); } catch { /* dead listener */ } }
+  for (const cb of allSubs) { try { cb(s); } catch { /* dead listener */ } }
+}
 function touch(s) {
   const g = sigOf(s);
   if (g === s._sig) return s;

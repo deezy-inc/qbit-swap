@@ -8,6 +8,7 @@ import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { dirname, join, extname } from "node:path";
 import { startServer } from "../../coordinator/server.js";
+import { startAdmin } from "../../coordinator/admin.js";
 import { startFaucet } from "./faucet.js";
 import { qbit, btc } from "../../coordinator/chain.js";
 
@@ -53,6 +54,7 @@ async function main() {
   await startServer(COORD);
   await startFaucet(FAUCET);
   await unified();
+  if (process.env.ADMIN !== "off") await startAdmin(Number(process.env.ADMIN_PORT || 8790));
   await loadWallets();
   if (Number(await qbit.rpcWallet("bob", "getbalance")) < 50) await qmineTo(1010);
   if (Number(await btc.rpcWallet("alice", "getbalance")) < 10) await bmine(101);

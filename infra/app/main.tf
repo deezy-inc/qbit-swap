@@ -57,6 +57,8 @@ resource "aws_instance" "app" {
     qbit_rpc_url       = var.qbit_rpc_url
     qbit_watch         = var.qbit_watch
     orderbook          = var.orderbook ? "1" : ""
+    admin_token        = var.admin_token
+    admin_port         = var.admin_port
   })
   # Re-render + replace the instance when the wiring changes.
   user_data_replace_on_change = true
