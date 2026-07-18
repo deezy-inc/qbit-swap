@@ -83,6 +83,9 @@ const en = {
   // watchtower safety net
   armingNet: "Setting up your safety net — please don't close this tab yet…",
   armedNet: "Safety net armed ✓ — you can safely close this tab now; the swap will finish or refund on its own.",
+  netReceive: "You'll receive ≈ {net} {coin} (after ~{fee} network fee, at the current recommended rate).",
+  afterFeeShort: "− ~{fee} fee",
+  downloadRecoveryBackup: "Download backup with recovery txs",
   leaveWarn: "Your safety net isn't set up yet — if you leave now you'll need to come back to finish or get a refund.",
   underfundWarn: "⚠ A deposit came in below the agreed amount, so the swap is paused. An underfunded deposit can be refunded after its timelock.",
   securityErr: "⚠ Security check failed — the swap's addresses don't match your keys. Do NOT send any funds. Refresh the page or start over.",
@@ -163,6 +166,9 @@ const zh = {
   // watchtower safety net
   armingNet: "正在设置您的安全网——请暂时不要关闭此标签页…",
   armedNet: "安全网已启用 ✓——您现在可以安全关闭此标签页；兑换将自动完成或退款。",
+  netReceive: "您将收到约 {net} {coin}（按当前推荐费率扣除约 {fee} 网络手续费后）。",
+  afterFeeShort: "− 约 {fee} 手续费",
+  downloadRecoveryBackup: "下载含恢复交易的备份",
   leaveWarn: "您的安全网尚未设置——如果现在离开，您需要回来才能完成或退款。",
   underfundWarn: "⚠ 有一笔存入金额低于约定金额，兑换已暂停。金额不足的存入可在其时间锁到期后退款。",
   securityErr: "⚠ 安全校验失败——兑换地址与您的密钥不匹配。请勿发送任何资金。请刷新页面或重新开始。",

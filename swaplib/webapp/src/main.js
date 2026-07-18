@@ -2,7 +2,7 @@
 // per-swap keys, signs its own claim/refund, and talks to a keyless coordinator. Either side can
 // initiate (the first screen picks the direction). Backup is a plaintext file (no password for now).
 // UI strings are translated via i18n (English / 简体中文) with a header switcher.
-import { SwapClient } from "./swapflow.js";
+import { SwapClient, dynFee } from "./swapflow.js";
 import { exportBackup, importBackup, Vault } from "./keystore.js";
 import { t, getLang, setLang, LANGS } from "./i18n.js";
 import { addressToScriptPubKey, addressCoin } from "@qbit-swap/client";
@@ -48,6 +48,15 @@ const DIR = { btc2qbt: { from: "BTC", to: "QBT" }, qbt2btc: { from: "QBT", to: "
 const coinLeg = (coin) => (coin === "BTC" ? "btc" : "qbit");
 const sats = (n) => (n / 1e8).toLocaleString(undefined, { maximumFractionDigits: 8 });
 const toSats = (v) => Math.round(parseFloat(v) * 1e8);
+const DUST_UI = 546;
+// What the receiver nets after the network fee for CLAIMING the coin they receive. The claim is sized
+// at mempool's High-priority feerate (same dynFee the client signs with), so this matches reality.
+function netReceive(recv, feerates) {
+  const gross = coinSats(recv);
+  const fee = Math.min(dynFee(coinLeg(recv), "claim", feerates), Math.max(0, gross - DUST_UI));
+  return { gross, fee, net: gross - fee };
+}
+const feeStr = (coin, fee) => (coin === "BTC" ? `${fee.toLocaleString()} sat` : `${sats(fee)} QBT`);
 const shorten = (s, n = 10) => (s && s.length > 2 * n ? `${s.slice(0, n)}…${s.slice(-n)}` : s);
 const parseHash = () => Object.fromEntries(new URLSearchParams(location.hash.slice(1)));
 
@@ -324,6 +333,7 @@ async function startParticipant({ coordinator, id, token }) {
   render(screen({ title: t("loadingSwap"), body: [h("span", { class: "muted" }, t("fetchingTerms"))] }));
   const v = await (await fetch(`${coordinator}/swaps/${id}`, { headers: { "x-swap-token": token } })).json();
   flow.direction = v.direction; flow.btcSats = v.terms.btcSats; flow.qbtSats = v.terms.qbtSats;
+  flow.feerates = v.feerates;
   stepInvited();
 }
 function stepInvited() {
@@ -334,7 +344,8 @@ function stepInvited() {
     body: [
       h("div", { class: "fund" },
         h("div", {}, `${t("youSend")}  `, h("b", {}, `${sats(coinSats(send))} ${send}`)),
-        h("div", { style: "margin-top:4px" }, `${t("youReceive")}  `, h("b", {}, `${sats(coinSats(recv))} ${recv}`))),
+        h("div", { style: "margin-top:4px" }, `${t("youReceive")}  `, h("b", {}, `${sats(netReceive(recv, flow.feerates).net)} ${recv}`),
+          h("span", { class: "note", style: "margin-left:6px" }, t("afterFeeShort", { fee: feeStr(recv, netReceive(recv, flow.feerates).fee) })))),
       h("p", { class: "note" }, t("invitedNote")),
     ],
     cta: t("continue"), onCta: () => stepReceive(),
@@ -380,6 +391,17 @@ function renderLive(card, v) {
   if (!terminal && bothFunded) {
     card.append(h("div", { class: "note statusline", style: `margin-top:6px;color:${armed ? "var(--good)" : "var(--warn)"}` },
       h("span", {}, armed ? "🛡️" : "⏳"), armed ? t("armedNet") : t("armingNet")));
+  }
+  // Watchtower is armed and we hold the pre-signed recovery ladder — let the user fold it into a backup.
+  if (!terminal && armed && flow.client?.recovery) {
+    if (!flow._recoverySaved) { vault.save(flow.client.secrets()).catch(() => {}); flow._recoverySaved = true; }
+    card.append(h("div", { class: "btns", style: "margin-top:6px" },
+      h("button", { onclick: () => saveFile(`qbit-swap-${flow.client.id.slice(0, 8)}-recovery.json`, exportBackup(flow.client.secrets())) }, t("downloadRecoveryBackup"))));
+  }
+  // Show what the receiver will net after the (mempool High-priority) claim fee.
+  if (!terminal && v.feerates && v.htlc) {
+    const { net, fee } = netReceive(recv, v.feerates);
+    card.append(h("p", { class: "note" }, t("netReceive", { net: sats(net), coin: recv, fee: feeStr(recv, fee) })));
   }
   if (!terminal && flow.mode === "create" && flow.bobLink) {
     card.append(h("div", { class: "btns", style: "margin-top:8px" }, copyButton("copyInvite", "inviteCopied", () => flow.bobLink)));

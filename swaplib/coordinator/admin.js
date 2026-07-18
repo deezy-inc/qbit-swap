@@ -12,6 +12,26 @@ import { qbit, btc } from "./chain.js";
 const TERMINAL = ["COMPLETE", "REFUNDED", "ABORTED"];
 const active = (s) => !TERMINAL.includes(s.state);
 
+// Flag swaps that need a human's eye: real funds are committed and something is wrong or unprotected.
+// Returns a list of short reason strings (empty = healthy).
+function riskOf(s) {
+  if (!s.roles || TERMINAL.includes(s.state)) return [];
+  const { fromLeg, toLeg } = s.roles, H = s.heights || {}, L = s.locktimes || {};
+  const unspent = (leg) => s.funding?.[leg] && !s.funding[leg].spent;
+  const armed = { alice: !!s.finish?.alice, bob: !!s.finish?.bob };
+  const away = (role) => !isOnline(s, role);
+  const r = [];
+  // a funded, unspent leg whose timelock has already passed — it should have claimed/refunded by now
+  for (const leg of [fromLeg, toLeg])
+    if (leg && unspent(leg) && L[leg] && (H[leg] || 0) >= L[leg]) r.push(`${leg} leg past timelock (h${H[leg] || 0}≥${L[leg]})`);
+  // a deposit is locked but its owner is offline and never armed the watchtower — nobody will act for them
+  for (const [role, leg] of [["alice", fromLeg], ["bob", toLeg]])
+    if (leg && unspent(leg) && away(role) && !armed[role]) r.push(`${role}'s ${leg} deposit unprotected (offline, no watchtower)`);
+  // preimage is public but the participant hasn't claimed and can't be helped — risk of losing their side
+  if (s.preimage && unspent(fromLeg) && away("bob") && !armed.bob) r.push(`preimage public, bob hasn't claimed ${fromLeg} (offline, no watchtower)`);
+  return r;
+}
+
 // ── redacted projections (never leak tokens / raw signed tx bundles) ──────────────────────────
 function summary(s) {
   return {
@@ -26,6 +46,7 @@ function summary(s) {
     armed: { alice: !!s.finish?.alice, bob: !!s.finish?.bob }, // watchtower pre-signed
     preimage: !!s.preimage,
     short: s.shortFunded || null,
+    risk: riskOf(s),
   };
 }
 function detail(s) {
@@ -88,6 +109,7 @@ async function overview() {
       refunded: (counts.REFUNDED || 0) + (counts.ABORTED || 0),
       onlineSwaps,
       wtActions: swaps.reduce((n, s) => n + Object.keys(s.wt || {}).length, 0),
+      atRisk: swaps.reduce((n, s) => n + (riskOf(s).length ? 1 : 0), 0),
     },
     volume: { btcSats: volBtc, qbtSats: volQbt },
     offers: { total: offers.length, ...offerCounts },
@@ -240,14 +262,16 @@ async function refreshOverview(){
   const cp=(el,c,label)=>{const e=$(el);e.textContent=label+" "+(c.ok?("#"+c.height):"down")+" · "+c.backend;e.style.color=c.ok?"":"var(--bad)"};
   cp("#btcp",o.chains.btc,"BTC");cp("#qbtp",o.chains.qbit,"QBT");
   const t=o.totals;
+  const risk=t.atRisk||0;
   const cards=[
+    ["at risk",risk,"need attention",risk>0?"var(--bad)":null],
     ["swaps",t.swaps],["active",t.active],["complete",t.complete],["refunded",t.refunded],
     ["parties online",t.onlineSwaps,"swaps"],
     ["watchtower acts",t.wtActions||0,"coordinator stepped in"],
     ["completed volume",btc(o.volume.btcSats)+" · "+qbt(o.volume.qbtSats),""],
     ["offers",o.offers.total,(o.offers.open||0)+" open"],
-  ].map(([k,v,s])=>'<div class="card"><div class="k">'+k+'</div><div class="v">'+v+(s?' <small>'+s+'</small>':'')+'</div></div>').join("");
-  window._counts=o.counts;
+  ].map(([k,v,s,color])=>'<div class="card"'+(color?' style="border-color:'+color+'"':'')+'><div class="k">'+k+'</div><div class="v"'+(color?' style="color:'+color+'"':'')+'>'+v+(s?' <small>'+s+'</small>':'')+'</div></div>').join("");
+  window._counts=o.counts; window._atRisk=risk;
   renderShell(cards);
 }
 function renderShell(cards){
@@ -263,7 +287,8 @@ function renderShell(cards){
 }
 function renderChips(){
   const c=window._counts||{};const states=Object.keys(c);
-  $("#chips").innerHTML='<span class="chip '+(FILTER?"":"sel")+'" onclick="setF(null)">all</span>'+
+  const risk=(window._atRisk||0)>0?'<span class="chip'+(FILTER==="@risk"?" sel":"")+'" style="border-color:var(--bad);color:var(--bad)" onclick="setF(\\'@risk\\')">⚠ at risk '+window._atRisk+'</span>':'';
+  $("#chips").innerHTML='<span class="chip '+(FILTER?"":"sel")+'" onclick="setF(null)">all</span>'+risk+
     states.map(s=>'<span class="chip '+(FILTER===s?"sel":"")+'" onclick="setF(\\''+s+'\\')">'+s+' '+c[s]+'</span>').join("");
 }
 window.setF=(s)=>{FILTER=s;renderChips();renderRows()};
@@ -276,14 +301,18 @@ function rowHtml(s){
   const funded='<span class="dots" title="BTC / QBT funding">'+dd(s.funded.btc)+dd(s.funded.qbit)+'</span>';
   const parties='<span class="dots" title="alice / bob online">'+dd(s.online.alice)+dd(s.online.bob)+'</span>';
   const armed='<span class="dots" title="watchtower armed: alice / bob">'+dd(s.armed.alice)+dd(s.armed.bob)+'</span>';
-  return '<tr data-id="'+s.id+'" onclick="openSwap(\\''+s.id+'\\')"><td class="mono">'+short(s.id)+
-    (s.short?' <span title="short-funded" style="color:var(--bad)">⚠</span>':'')+'</td><td class="mut">'+dir+'</td><td>'+badge(s.state)+
+  const risky=s.risk&&s.risk.length;
+  const warn=risky?' <span title="'+s.risk.join(" · ")+'" style="color:var(--bad)">⚠</span>'
+    :(s.short?' <span title="short-funded" style="color:var(--bad)">⚠</span>':'');
+  return '<tr data-id="'+s.id+'"'+(risky?' style="box-shadow:inset 3px 0 0 var(--bad)"':'')+' onclick="openSwap(\\''+s.id+'\\')"><td class="mono">'+short(s.id)+
+    warn+'</td><td class="mut">'+dir+'</td><td>'+badge(s.state)+
     '</td><td>'+btc(s.btcSats)+'</td><td>'+qbt(s.qbtSats)+'</td><td>'+funded+'</td><td>'+parties+'</td><td>'+armed+
     '</td><td class="mut">'+ago(s.createdAt)+'</td><td class="mut">'+(s.settledAt?ago(s.settledAt)+" ago":"—")+'</td></tr>';
 }
 function renderRows(){
   let list=[...SWAPS.values()];
-  if(FILTER)list=list.filter(s=>s.state===FILTER);
+  if(FILTER==="@risk")list=list.filter(s=>s.risk&&s.risk.length);
+  else if(FILTER)list=list.filter(s=>s.state===FILTER);
   if(Q)list=list.filter(s=>s.id.toLowerCase().includes(Q)||s.state.toLowerCase().includes(Q)||(s.direction||"").includes(Q));
   list.sort((a,b)=>(b.createdAt||0)-(a.createdAt||0));
   const tb=$("#rows");if(!tb)return;

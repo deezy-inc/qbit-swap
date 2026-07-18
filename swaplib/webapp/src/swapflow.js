@@ -41,6 +41,7 @@ export class SwapClient {
       btcDest: this.btcDest, qbitDest: this.qbitDest,
       qbitPk: hex(this.qbit.pk), qbitSk: hex(this.qbit.sk), btcPriv: hex(this.btcPriv),
       secret: this.secret ? hex(this.secret) : null, H: this.H ? hex(this.H) : null,
+      recovery: this.recovery || null,   // pre-signed watchtower ladder (claim tiers + refund), for offline recovery
     };
   }
   restore(p) {
@@ -48,6 +49,7 @@ export class SwapClient {
     this.btcDest = p.btcDest; this.qbitDest = p.qbitDest;
     this.qbit = { pk: bin(p.qbitPk), sk: bin(p.qbitSk) }; this.btcPriv = bin(p.btcPriv);
     this.secret = p.secret ? bin(p.secret) : null; this.H = p.H ? bin(p.H) : null;
+    this.recovery = p.recovery || null;
     return this;
   }
 
@@ -157,17 +159,25 @@ export class SwapClient {
       ({ feerate: fr, tx: hex(await this.#build(v, claim, "claim", claimPreimage, fee)) })));
     const refundFeerate = LADDER[refund][Math.floor(LADDER[refund].length / 2)];
     const refundTx = hex(await this.#build(v, refund, "refund", new Uint8Array(0), feeFor(refund, "refund", refundFeerate)));
-    await this.#api(`/swaps/${this.id}/finish`, { token: this.token, method: "POST", body: {
+    const bundle = {
       claim: { leg: claim, needsPreimage: this.role !== "alice", tiers },
       refund: { leg: refund, tx: refundTx },
-    } });
+    };
+    await this.#api(`/swaps/${this.id}/finish`, { token: this.token, method: "POST", body: bundle });
+    // Keep our own copy of the pre-signed recovery ladder so it can be written into the backup file —
+    // the file alone (keys + these txs) is enough to recover even if the coordinator is gone.
+    this.recovery = bundle;
     this.armed = true;   // the coordinator now reflects safetyNet.self=true in the view
   }
 
   // ── signing (leg-generic; build a tx at a given fee, then optionally broadcast) ──
   #build(v, leg, kind, preimage, feeSats) { return leg === "qbit" ? this.#buildQbit(v, kind, preimage, feeSats) : this.#buildBtc(v, kind, preimage, feeSats); }
-  async #claim(v, leg, preimage) { return this.#send(leg, "claim", await this.#build(v, leg, "claim", preimage, this.feeSats[leg])); }
-  async #refund(v, leg) { return this.#send(leg, "refund", await this.#build(v, leg, "refund", new Uint8Array(0), this.feeSats[leg])); }
+  // Live claim/refund the party signs itself: size the BTC fee at mempool's High-priority tier
+  // (v.feerates.fastestFee) so it confirms promptly — the pre-signed fee ladder is only the fallback
+  // the watchtower uses when this party is OFFLINE. Never let the fee eat the output below dust.
+  #liveFee(v, leg, kind) { const amt = v.funding?.[leg]?.amountSats || 0; return Math.min(dynFee(leg, kind, v.feerates), Math.max(FEE_FLOOR[leg], amt - DUST)); }
+  async #claim(v, leg, preimage) { return this.#send(leg, "claim", await this.#build(v, leg, "claim", preimage, this.#liveFee(v, leg, "claim"))); }
+  async #refund(v, leg) { return this.#send(leg, "refund", await this.#build(v, leg, "refund", new Uint8Array(0), this.#liveFee(v, leg, "refund"))); }
 
   async #buildQbit(v, kind, preimage, feeSats) {
     const f = v.funding.qbit, leaf = bin(v.htlc.qbit.leaf), spk = bin(v.htlc.qbit.spk);
@@ -186,10 +196,21 @@ export class SwapClient {
   }
 }
 
-// Fixed fee ladders (sat/vB) the client pre-signs; the coordinator picks/escalates tiers using live
-// mempool.space feerates. BTC spans economy→extreme; Qbit is uncongested so a low pair suffices.
+// Fixed fee ladders (sat/vB) the client pre-signs for the WATCHTOWER fallback; the coordinator
+// picks/escalates tiers using live mempool.space feerates when it must act for an offline party. BTC
+// spans economy→extreme; Qbit is uncongested so a low pair suffices.
 const DUST = 546;
 const LADDER = { btc: [2, 8, 25, 75, 200], qbit: [1, 5] };
 const VBYTES = { btc: { claim: 150, refund: 120 }, qbit: { claim: 1000, refund: 1000 } };   // rough (SLH-DSA witness dominates the qbit legs)
 const FEE_FLOOR = { btc: 400, qbit: 8000 };
 const feeFor = (leg, kind, feerate) => Math.max(FEE_FLOOR[leg], Math.round(feerate * VBYTES[leg][kind]));
+// Qbit is uncongested, so its live fee is fixed; BTC is sized from the live mempool recommendation.
+const QBIT_FEE = { claim: 100000, refund: 100000 };
+// The fee (sats) for a live-signed claim/refund. BTC: mempool "High priority" (fastestFee) for the
+// urgent claim, "Medium" (halfHourFee) for the timelock-gated refund. This is the NORMAL path; the
+// pre-signed ladder is only needed in extreme situations (party offline during a fee spike).
+export function dynFee(leg, kind, feerates) {
+  if (leg !== "btc") return QBIT_FEE[kind] ?? QBIT_FEE.claim;
+  const fr = Math.max(1, (kind === "claim" ? feerates?.fastestFee : feerates?.halfHourFee) || 0);
+  return Math.max(FEE_FLOOR.btc, Math.round(fr * VBYTES.btc[kind]));
+}
