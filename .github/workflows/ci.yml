@@ -1,0 +1,33 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Runs the headless checks only (no regtest lab / network). The end-to-end tests
+# (demo.js, refund_demo.js, *.e2e.mjs, claim_e2e.js, btc_e2e.js) need live qbit + bitcoin
+# regtest nodes, so they're not run in CI.
+jobs:
+  node:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: client library — golden vectors (p2mr / sighash / tx / WASM signer)
+        working-directory: swaplib/js
+        run: npm install --no-audit --no-fund && npm test
+
+      - name: coordinator — esplora BTC adapter (mocked fetch: mapping + rate-limit retry)
+        working-directory: swaplib/coordinator
+        run: npm install --no-audit --no-fund && npm test
+
+      - name: web app — key-store envelope + production bundle build
+        working-directory: swaplib/webapp
+        run: |
+          npm install --no-audit --no-fund
+          npm test
+          npm run build

@@ -1,5 +1,7 @@
 # qbit-swap
 
+[![CI](https://github.com/deezy-inc/qbit-swap/actions/workflows/ci.yml/badge.svg)](https://github.com/deezy-inc/qbit-swap/actions/workflows/ci.yml)
+
 Non-custodial atomic swaps between **Bitcoin (BTC)** and **Qbit (QBT)** — a post-quantum Bitcoin fork
 (SLH-DSA signatures, `p2mr` witness-v2 addresses). Users trade peer-to-peer through a **keyless
 coordinator**: all keys are ephemeral and generated in the user's browser, all signing happens
