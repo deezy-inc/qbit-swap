@@ -34,6 +34,10 @@ coordinator API).
 The coordinator gates the initiator's claim on **reorg-safe confirmations** via Qbit's
 `getconfirmationtarget` RPC, and surfaces the preimage + refundability over an SSE feed.
 
+The default experience is **peer-to-peer** (share a private link with a counterparty). An optional
+maker/taker **order book** — makers post offers, takers click to buy/sell — exists behind a web-app
+feature flag (`window.QBIT_ORDERBOOK`, default off) with coordinator support in `offers.js`.
+
 ## Backends (what infrastructure you need)
 
 The coordinator only does chain **reads + broadcast** (it's keyless). Each chain picks a backend via

@@ -28,6 +28,14 @@ The watcher surfaces `refund.{qbit,btc}.available` once a funded, still-unspent 
 and flags a leg `spent` when its claim/refund lands (via the API or directly) — so a swap that
 resolves out-of-band still reaches a terminal state.
 
+## Order book API (optional — `offers.js`)
+A maker/taker layer on top of the swap engine (the web app gates it behind a flag; see its README).
+- `POST /offers` — maker posts one lot `{ giveCoin, giveSats, wantCoin, wantSats }` → `{ id, makerToken }`
+- `GET  /offers` — public book: `{ asks, bids }` (QBT priced in BTC; ask = sell QBT for BTC), best price first
+- `POST /offers/:id/take` — instantiate a swap from the offer (taker = initiator) → `{ swapId, takerToken, direction, terms }`
+- `GET  /offers/:id?makerToken=…` — maker view incl. the take (its swap token) so it can fulfill
+- `POST /offers/:id/cancel` (maker token) — withdraw an open offer
+
 ## Backends (env, per chain — see `chain.js`)
 Each chain picks a backend via `<CHAIN>_BACKEND` (falls back to `COORD_CHAIN`, then `dev`):
 - **`dev`** — shells to a node CLI. Set `<CHAIN>_CLI` and, to run remotely, `<CHAIN>_SSH_HOST`

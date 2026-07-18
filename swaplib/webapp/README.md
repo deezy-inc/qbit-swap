@@ -17,6 +17,15 @@ from wherever you like.
   P2WPKH/P2WSH, P2TR, qbit P2MR, and legacy P2PKH/P2SH).
 - The app drives the swap on the coordinator's live feed (SSE) and **auto-signs** claim/refund. If the
   swap stalls past the timelocks, each side auto-refunds its own deposit.
+- A **live presence indicator** shows whether your counterparty is online (from their SSE/API activity).
+- UI is bilingual (**English / 简体中文**) via `src/i18n.js` — a header switcher, choice persisted.
+
+## Order book (feature-flagged, default OFF)
+There's an optional maker/taker **order book**: makers post offers, the landing shows the relevant side
+for your chosen direction, and you click one to buy/sell (it takes the offer and runs the taker wizard).
+It's gated behind `window.QBIT_ORDERBOOK` (default off) — with it off, choosing a direction goes
+straight to the peer-to-peer flow, which is the primary experience. See `deploy/maker-trial.js` for a
+regtest maker that posts asks + fulfills takes.
 
 ## Key protection (`src/keystore.js`)
 For now (product decision) the ephemeral secrets are kept in the **clear**: a plaintext backup file
