@@ -1,0 +1,24 @@
+# deps
+node_modules/
+package-lock.json
+
+# python
+__pycache__/
+*.pyc
+
+# compiled C helpers (rebuild from source via build steps in READMEs)
+*.o
+swaplib/pqcsign
+swaplib/pqctool
+swaplib/wasm/*.o
+
+# coordinator runtime state
+coord-*.json
+*.log
+.agent-notes.md
+
+# webapp build output
+swaplib/webapp/dist/
+
+# local lab config (hosts/creds)
+swaplib/webapp/deploy/lab.env

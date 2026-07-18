@@ -1,0 +1,161 @@
+diff --git a/src/script/sign.cpp b/src/script/sign.cpp
+index d828498..07d6e87 100644
+--- a/src/script/sign.cpp
++++ b/src/script/sign.cpp
+@@ -497,9 +497,44 @@ struct P2MRScriptSigningPlan {
+     int missing_signatures{0};
+     int new_signatures{0};
+     bool complete{false};
++    bool finalizable{true};
+     size_t witness_size{0};
+ };
+ 
++// Enumerate every pubkey occupying a CHECKSIGPQC / CHECKSIGADD position in an arbitrary P2MR
++// leaf. Unlike ParseP2MRScript() -- which only recognises the pk()/multi_a templates the node
++// can *finalise* -- this enumerates keys in leaves the node cannot finalise (e.g. HTLCs), so a
++// held key can still contribute a partial script-path signature for PSBT handoff to a downstream
++// finaliser or co-signer. Mirrors Bitcoin Core emitting partial tapscript signatures for scripts
++// it does not finalise itself.
++static void ExtractP2MRSignableKeys(std::span<const unsigned char> script_bytes, std::vector<CPQCPubKey>& pubkeys)
++{
++    pubkeys.clear();
++    const CScript script(script_bytes.begin(), script_bytes.end());
++    CScript::const_iterator it{script.begin()};
++    opcodetype opcode;
++    std::vector<unsigned char> push_data;
++    std::vector<unsigned char> last_push;
++    bool have_last_push{false};
++    while (it != script.end()) {
++        if (!script.GetOp(it, opcode, push_data)) {
++            pubkeys.clear(); // malformed: contribute nothing rather than guess
++            return;
++        }
++        if ((opcode == OP_CHECKSIGPQC || opcode == OP_CHECKSIGADD) && have_last_push &&
++            last_push.size() == CPQCPubKey::SIZE) {
++            CPQCPubKey key{std::span<const unsigned char>(last_push)};
++            if (key.IsValid()) AddUniqueP2MRPubKey(pubkeys, key);
++        }
++        if (opcode <= OP_PUSHDATA4 && !push_data.empty()) {
++            last_push = push_data;
++            have_last_push = true;
++        } else {
++            have_last_push = false;
++        }
++    }
++}
++
+ static bool BuildP2MRScriptSigningPlan(const SigningProvider& provider, const BaseSignatureCreator& creator, SignatureData& sigdata, int leaf_version, std::span<const unsigned char> script_bytes, const std::vector<unsigned char>& control_block, P2MRScriptSigningPlan& plan)
+ {
+     // Pre-activation, signing/finalization stays pinned to P2MR v1 leaves only.
+@@ -507,7 +542,14 @@ static bool BuildP2MRScriptSigningPlan(const SigningProvider& provider, const Ba
+ 
+     std::vector<CPQCPubKey> pubkeys;
+     int threshold{0};
+-    if (!ParseP2MRScript(script_bytes, pubkeys, threshold)) return false;
++    bool finalizable{true};
++    if (!ParseP2MRScript(script_bytes, pubkeys, threshold)) {
++        // Not a finalisable template. Enumerate keys anyway so a held key can add a partial
++        // script-path signature for PSBT handoff (e.g. HTLC leaves the node cannot finalise).
++        ExtractP2MRSignableKeys(script_bytes, pubkeys);
++        if (pubkeys.empty()) return false;
++        finalizable = false;
++    }
+     if (static_cast<size_t>(threshold) > P2MR_V1_MAX_STANDARD_SIGNATURES) return false;
+ 
+     const uint256 leaf_hash = ComputeP2MRLeafHash(leaf_version, script_bytes);
+@@ -536,7 +578,12 @@ static bool BuildP2MRScriptSigningPlan(const SigningProvider& provider, const Ba
+             ++num_candidates;
+         }
+     }
+-    if (num_candidates < threshold) {
++    if (!finalizable) {
++        // Non-template leaf: contribute a partial signature for every key we hold and never claim
++        // the leaf is finalisable (branch selection / preimages are supplied downstream).
++        if (num_candidates == 0) return false;
++        threshold = num_candidates;
++    } else if (num_candidates < threshold) {
+         for (const auto& pubkey : pubkeys) {
+             if (LookupValidP2MRScriptSig(sigdata, creator, pubkey, leaf_hash) == nullptr &&
+                 !creator.CanCreatePQCSignature(provider, pubkey)) {
+@@ -582,7 +629,8 @@ static bool BuildP2MRScriptSigningPlan(const SigningProvider& provider, const Ba
+     plan.candidate_pubkeys = std::move(candidate_pubkeys);
+     plan.leaf_hash = leaf_hash;
+     plan.threshold = threshold;
+-    plan.complete = num_candidates >= threshold;
++    plan.finalizable = finalizable;
++    plan.complete = finalizable && num_candidates >= threshold;
+     plan.missing_signatures = std::max(0, threshold - num_candidates);
+     plan.new_signatures = std::max(0, std::min(threshold, num_candidates) - num_cached_signatures);
+     plan.witness_size = GetSerializeSize(estimated_stack);
+diff --git a/src/test/script_p2mr_tests.cpp b/src/test/script_p2mr_tests.cpp
+index cc4784b..c1a266f 100644
+--- a/src/test/script_p2mr_tests.cpp
++++ b/src/test/script_p2mr_tests.cpp
+@@ -1945,6 +1945,67 @@ BOOST_AUTO_TEST_CASE(p2mr_signing_single_key_consumes_one_counter)
+     BOOST_CHECK(sigdata.scriptWitness.stack.at(1) == ScriptBytes(leaf_script));
+ }
+ 
++BOOST_AUTO_TEST_CASE(p2mr_partial_signs_non_template_leaf)
++{
++    // Regression test for generic p2mr script-path signing. An HTLC leaf is neither pk() nor
++    // multi_a, so the node cannot *finalise* it; but it must still contribute a partial
++    // script-path signature for a key it holds, so a PSBT co-signer / external finaliser can
++    // complete the spend. (Previously such a leaf produced no signature at all.)
++    CPQCKey recv_key;
++    recv_key.MakeNewKey();
++    CPQCKey refund_key;
++    refund_key.MakeNewKey();
++
++    const valtype hash_h(32, 0xab); // hashlock digest (its preimage is irrelevant to signing)
++
++    // OP_IF <hashlock> <recv> CHECKSIGPQC OP_ELSE <cltv> <refund> CHECKSIGPQC OP_ENDIF
++    const CScript leaf_script = CScript{}
++        << OP_IF
++            << OP_SHA256 << hash_h << OP_EQUALVERIFY
++            << PQCPubKeyBytes(recv_key.GetPubKey()) << OP_CHECKSIGPQC
++        << OP_ELSE
++            << 144 << OP_CHECKLOCKTIMEVERIFY << OP_DROP
++            << PQCPubKeyBytes(refund_key.GetPubKey()) << OP_CHECKSIGPQC
++        << OP_ENDIF;
++
++    TaprootBuilder builder;
++    builder.AddP2MR(/*depth=*/0, ScriptBytes(leaf_script), P2MR_LEAF_VERSION_V1).FinalizeP2MR();
++    const WitnessV2P2MR output = builder.GetP2MROutput();
++    const CScript script_pubkey = BuildP2MRScriptPubKey(output.GetMerkleRoot());
++    const uint256 leaf_hash = ComputeP2MRLeafHash(P2MR_LEAF_VERSION_V1, ScriptBytes(leaf_script));
++
++    // The signer holds only the receiver (hashlock-branch) key.
++    FlatSigningProvider provider;
++    AddPQCSigningKey(provider, recv_key);
++
++    const P2MRSpendContext spend{BuildP2MRSpend(
++        script_pubkey, leaf_script, /*stack_items=*/{}, /*control_block=*/{P2MR_LEAF_VERSION_V1_CONTROL})};
++    MutableTransactionSignatureCreator creator(
++        spend.tx_spend, /*input_index=*/0, spend.tx_credit.vout.at(0).nValue, &spend.txdata, SIGHASH_DEFAULT);
++
++    SignatureData sigdata;
++    sigdata.p2mr_spenddata = builder.GetP2MRSpendData();
++
++    // The node cannot finalise an HTLC leaf...
++    BOOST_CHECK(!ProduceSignature(provider, creator, script_pubkey, sigdata));
++
++    // ...but it contributes a partial signature for the held key, and nothing for the key it lacks.
++    const auto held = std::make_pair(recv_key.GetPubKey(), leaf_hash);
++    const auto missing = std::make_pair(refund_key.GetPubKey(), leaf_hash);
++    BOOST_REQUIRE_EQUAL(sigdata.p2mr_script_sigs.count(held), 1U);
++    BOOST_CHECK_EQUAL(sigdata.p2mr_script_sigs.count(missing), 0U);
++
++    // The partial signature is a valid SLH-DSA signature over this spend's P2MR sighash, so an
++    // external finaliser can drop it straight into the claim witness.
++    const valtype& sig = sigdata.p2mr_script_sigs.at(held);
++    BOOST_REQUIRE_EQUAL(sig.size(), PQC_SIG_SIZE); // SIGHASH_DEFAULT carries no trailing hashtype byte
++    ScriptExecutionData execdata = BuildExecData(leaf_script);
++    uint256 sighash;
++    BOOST_REQUIRE(SignatureHashP2MR(sighash, execdata, spend.tx_spend, /*in_pos=*/0,
++                                    SIGHASH_DEFAULT, spend.txdata, MissingDataBehavior::ASSERT_FAIL));
++    BOOST_CHECK(recv_key.GetPubKey().Verify(sighash, sig));
++}
++
+ BOOST_AUTO_TEST_CASE(p2mr_sign_transaction_many_inputs_shared_key_consumes_unique_counters)
+ {
+     static constexpr size_t INPUT_COUNT{4};

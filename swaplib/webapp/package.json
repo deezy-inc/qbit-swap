@@ -1,0 +1,17 @@
+{
+  "name": "qbit-swap-webapp",
+  "version": "0.1.0",
+  "description": "Wallet-agnostic browser app for BTC<->QBT atomic swaps (ephemeral keys, keyless coordinator)",
+  "type": "module",
+  "scripts": {
+    "build": "bash build.sh",
+    "test": "node test/keystore.test.mjs"
+  },
+  "dependencies": {
+    "@qbit-swap/client": "file:../js"
+  },
+  "devDependencies": {
+    "esbuild": "^0.24.0",
+    "playwright": "^1.61.1"
+  }
+}

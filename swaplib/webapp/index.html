@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>qbit swap — atomic BTC ⇄ QBT</title>
+<style>
+  :root {
+    --bg:#0f1115; --panel:#181b22; --panel2:#20242e; --line:#2a2f3a; --fg:#e7e9ee; --mut:#9aa3b2;
+    --accent:#5b8cff; --good:#3fbf7f; --warn:#e6b450; --bad:#e5646e; --mono:ui-monospace,SFMono-Regular,Menlo,monospace;
+  }
+  @media (prefers-color-scheme: light) {
+    :root { --bg:#f6f7f9; --panel:#fff; --panel2:#eef1f5; --line:#dde1e8; --fg:#1a1d23; --mut:#5a6472; }
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; font:15px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; background:var(--bg); color:var(--fg); }
+  header { padding:20px 24px; border-bottom:1px solid var(--line); display:flex; align-items:baseline; gap:12px; }
+  header h1 { font-size:18px; margin:0; letter-spacing:.2px; }
+  header .tag { color:var(--mut); font-size:13px; }
+  main { max-width:760px; margin:0 auto; padding:24px 16px 64px; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:18px 18px; margin:0 0 16px; }
+  .card h2 { font-size:15px; margin:0 0 12px; }
+  .muted { color:var(--mut); }
+  label { display:block; font-size:13px; color:var(--mut); margin:10px 0 4px; }
+  input, select, button { font:inherit; color:var(--fg); }
+  input, select { width:100%; padding:9px 11px; background:var(--panel2); border:1px solid var(--line); border-radius:8px; }
+  .row { display:flex; gap:12px; } .row > * { flex:1; }
+  button { cursor:pointer; padding:9px 14px; border-radius:8px; border:1px solid var(--line); background:var(--panel2); }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#fff; font-weight:600; }
+  button:disabled { opacity:.5; cursor:not-allowed; }
+  .btns { display:flex; gap:10px; flex-wrap:wrap; margin-top:14px; }
+  code, .mono { font-family:var(--mono); font-size:12.5px; word-break:break-all; }
+  .kv { display:grid; grid-template-columns:120px 1fr; gap:6px 12px; font-size:13px; }
+  .kv .mono { background:var(--panel2); padding:4px 7px; border-radius:6px; }
+  .badge { display:inline-block; padding:3px 10px; border-radius:999px; font-size:12px; font-weight:600; border:1px solid var(--line); }
+  .badge.good { color:var(--good); border-color:var(--good); } .badge.warn { color:var(--warn); border-color:var(--warn); }
+  .badge.bad { color:var(--bad); border-color:var(--bad); } .badge.info { color:var(--accent); border-color:var(--accent); }
+  .fund { border:1px dashed var(--line); border-radius:10px; padding:12px 14px; margin:10px 0; }
+  .fund .amt { font-size:20px; font-weight:700; }
+  .drop { border:1.5px dashed var(--line); border-radius:10px; padding:18px; text-align:center; color:var(--mut); }
+  .drop.over { border-color:var(--accent); color:var(--fg); }
+  .log { font-family:var(--mono); font-size:12px; background:var(--panel2); border-radius:8px; padding:10px; max-height:180px; overflow:auto; white-space:pre-wrap; }
+  .hide { display:none; }
+  .note { font-size:12.5px; color:var(--mut); margin-top:8px; }
+  a { color:var(--accent); }
+  .copy { font-size:12px; padding:5px 9px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>qbit&nbsp;swap</h1>
+  <span class="tag" id="tagline"></span>
+  <span id="lang" style="margin-left:auto;white-space:nowrap"></span>
+</header>
+<main id="app">
+  <div class="card"><span class="muted">Loading signer…</span></div>
+</main>
+<script type="module" src="./dist/app.js"></script>
+</body>
+</html>

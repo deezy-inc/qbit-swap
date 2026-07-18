@@ -1,0 +1,18 @@
+{
+  "name": "coordinator",
+  "version": "1.0.0",
+  "description": "",
+  "main": "chain.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "node server.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "dependencies": {
+    "@noble/hashes": "^2.2.0",
+    "@noble/secp256k1": "^3.1.0"
+  }
+}
