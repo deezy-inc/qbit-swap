@@ -250,7 +250,7 @@ async function wtSend(s, role, leg, kind, txHex, tier) {
   const acc = await chain.testAccept(txHex);
   if (!acc.allowed) return false;                 // already spent, or this tier too low right now — retry next tick/tier
   const txid = await chain.broadcast(txHex);
-  s.wt[`${role}:${kind}`] = { txid, tier, at: s.heights?.[leg] ?? 0 };
+  s.wt[`${role}:${kind}`] = { txid, tier, at: s.heights?.[leg] ?? 0, ts: Date.now() };
   await applyEffects(s, leg, kind, txid);
   return true;
 }

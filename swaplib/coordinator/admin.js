@@ -42,6 +42,24 @@ function detail(s) {
   };
 }
 
+// Every action the coordinator's watchtower took on behalf of an OFFLINE party, flattened across swaps
+// and enriched: resolve the tier index to its actual feerate, and which leg/chain it hit. Newest first.
+function watchtowerActions() {
+  const out = [];
+  for (const s of allSwaps()) {
+    for (const [key, rec] of Object.entries(s.wt || {})) {
+      const [role, kind] = key.split(":");
+      const leg = kind === "claim"
+        ? (role === "alice" ? s.roles?.toLeg : s.roles?.fromLeg)     // claim: initiator takes toLeg, participant takes fromLeg
+        : (role === "alice" ? s.roles?.fromLeg : s.roles?.toLeg);    // refund: own funded leg
+      const feerate = kind === "claim" && typeof rec.tier === "number"
+        ? s.finish?.[role]?.claim?.tiers?.[rec.tier]?.feerate ?? null : null;
+      out.push({ swapId: s.id, role, kind, leg, tier: rec.tier, feerate, txid: rec.txid, at: rec.at, ts: rec.ts || null, state: s.state });
+    }
+  }
+  return out.sort((a, b) => (b.ts || 0) - (a.ts || 0));
+}
+
 async function chainInfo(c) {
   try { return { backend: c.backend, watch: c.watch, height: await c.height(), ok: true }; }
   catch (e) { return { backend: c.backend, watch: c.watch, height: null, ok: false, error: String(e.message || e) }; }
@@ -69,6 +87,7 @@ async function overview() {
       complete: counts.COMPLETE || 0,
       refunded: (counts.REFUNDED || 0) + (counts.ABORTED || 0),
       onlineSwaps,
+      wtActions: swaps.reduce((n, s) => n + Object.keys(s.wt || {}).length, 0),
     },
     volume: { btcSats: volBtc, qbtSats: volQbt },
     offers: { total: offers.length, ...offerCounts },
@@ -109,6 +128,7 @@ export function startAdmin(port = Number(process.env.ADMIN_PORT || 8790), opts =
         return s ? json(res, 200, detail(s)) : json(res, 404, { error: "no such swap" });
       }
       if (p === "/api/offers") return json(res, 200, allOffers());
+      if (p === "/api/watchtower") return json(res, 200, watchtowerActions());
       if (p === "/stream") {
         res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
         res.write(": connected\n\n"); // immediate flush so EventSource fires onopen right away
@@ -211,7 +231,7 @@ function gate(){
   window.sv=()=>{TOKEN=$("#tk").value.trim();sessionStorage.setItem("qadm",TOKEN);boot()};
 }
 async function boot(){
-  try{ await refreshOverview(); await refreshSwaps(); connectStream(); }
+  try{ await refreshOverview(); await refreshSwaps(); await refreshWatchtower(); connectStream(); }
   catch(e){ if(String(e.message).includes("401")) return gate(); $("#app").innerHTML='<div class="empty">error: '+e.message+'</div>'; }
 }
 async function refreshOverview(){
@@ -223,6 +243,7 @@ async function refreshOverview(){
   const cards=[
     ["swaps",t.swaps],["active",t.active],["complete",t.complete],["refunded",t.refunded],
     ["parties online",t.onlineSwaps,"swaps"],
+    ["watchtower acts",t.wtActions||0,"coordinator stepped in"],
     ["completed volume",btc(o.volume.btcSats)+" · "+qbt(o.volume.qbtSats),""],
     ["offers",o.offers.total,(o.offers.open||0)+" open"],
   ].map(([k,v,s])=>'<div class="card"><div class="k">'+k+'</div><div class="v">'+v+(s?' <small>'+s+'</small>':'')+'</div></div>').join("");
@@ -234,7 +255,9 @@ function renderShell(cards){
   $("#app").innerHTML='<div class="cards" id="cards">'+cards+'</div>'
     +'<div class="row"><div class="chips" id="chips"></div><input class="search" id="q" placeholder="filter by id / state"/></div>'
     +'<table><thead><tr><th>id</th><th>dir</th><th>state</th><th>BTC</th><th>QBT</th><th>funded</th><th>parties</th><th>armed</th><th>age</th><th>settled</th></tr></thead><tbody id="rows"></tbody></table>'
-    +'<div id="log"><div class="row"><b>activity</b></div><div id="loglines"></div></div>';
+    +'<div class="row" style="margin-top:24px"><b>watchtower actions</b> <span class="mut" id="wtcount"></span><span class="mut" style="font-weight:400"> — txs the coordinator broadcast for an offline party</span></div>'
+    +'<table><thead><tr><th>when</th><th>swap</th><th>party</th><th>action</th><th>leg</th><th>feerate</th><th>txid</th></tr></thead><tbody id="wtrows"></tbody></table>'
+    +'<div id="log"><div class="row" style="margin-top:24px"><b>activity</b></div><div id="loglines"></div></div>';
   $("#q").oninput=(e)=>{Q=e.target.value.trim().toLowerCase();renderRows()};
   renderChips();
 }
@@ -270,6 +293,21 @@ window.openSwap=async(id)=>{
   $("#dtitle").textContent=id;$("#dbody").textContent="loading…";$("#dlg").showModal();
   try{$("#dbody").textContent=JSON.stringify(await api("/api/swaps/"+id),null,2);}catch(e){$("#dbody").textContent="error: "+e.message;}
 };
+function wtRowHtml(a){
+  const leg=(a.leg||"?").toUpperCase();
+  const act=a.kind==="claim"?'<span class="badge b-claim">claim</span>':'<span class="badge b-refund">refund</span>';
+  const fee=a.kind==="claim"
+    ?(a.feerate!=null?'<b>'+a.feerate+'</b> <span class="mut">sat/vB · tier '+a.tier+'</span>':'<span class="mut">tier '+a.tier+'</span>')
+    :'<span class="mut">—</span>';
+  return '<tr onclick="openSwap(\\''+a.swapId+'\\')"><td class="mut">'+(a.ts?ago(a.ts)+' ago':'—')+
+    '</td><td class="mono">'+short(a.swapId)+'</td><td>'+a.role+'</td><td>'+act+'</td><td>'+leg+
+    '</td><td>'+fee+'</td><td class="mono mut" title="'+(a.txid||'')+'">'+short(a.txid)+'…</td></tr>';
+}
+async function refreshWatchtower(){
+  const acts=await api("/api/watchtower");const tb=$("#wtrows");if(!tb)return;
+  $("#wtcount").textContent=acts.length?("· "+acts.length):"";
+  tb.innerHTML=acts.length?acts.map(wtRowHtml).join(""):'<tr><td colspan="7" class="empty">the coordinator has not had to step in yet</td></tr>';
+}
 let logn=0;
 function logLine(s){
   const box=$("#loglines");if(!box)return;
@@ -288,10 +326,10 @@ function connectStream(){
     if(!prev||prev.state!==s.state)logLine(s);
     renderRows();
     const tr=$('tr[data-id="'+s.id+'"]');if(tr){tr.classList.remove("flash");void tr.offsetWidth;tr.classList.add("flash")}
-    if(!prev)renderOverviewSoon();
+    if(!prev||prev.state!==s.state)renderOverviewSoon(); // new swap or transition (incl. watchtower acting) -> refresh overview + wt panel
   };
 }
-let ovT;function renderOverviewSoon(){clearTimeout(ovT);ovT=setTimeout(()=>refreshOverview().catch(()=>{}),400);}
-setInterval(()=>refreshOverview().catch(()=>{}),8000); // heights + counts tick
+let ovT;function renderOverviewSoon(){clearTimeout(ovT);ovT=setTimeout(()=>{refreshOverview().catch(()=>{});refreshWatchtower().catch(()=>{});},400);}
+setInterval(()=>{refreshOverview().catch(()=>{});refreshWatchtower().catch(()=>{});},8000); // heights + counts + watchtower tick
 if(!TOKEN)gate();else boot();
 </script></body></html>`;
