@@ -60,7 +60,12 @@ async function prefill(input, coin) { if (!FAUCET) return; try { input.value = a
 // ── flow state ────────────────────────────────────────────────────────────────
 const flow = { mode: null, direction: null, coordinator: DEFAULT_COORD, btcSats: 0, qbtSats: 0, receiveAddr: "", refundAddr: "", client: null, bobLink: null };
 const coinSats = (coin) => (coin === "BTC" ? flow.btcSats : flow.qbtSats);
-const roleCoins = () => { const d = DIR[flow.direction]; return flow.mode === "create" ? { send: d.from, recv: d.to } : { send: d.to, recv: d.from }; };
+// initiator (create/take) sends `from`, receives `to`; participant (join) sends `to`, receives `from`.
+const roleCoins = () => { const d = DIR[flow.direction]; return flow.mode === "join" ? { send: d.to, recv: d.from } : { send: d.from, recv: d.to }; };
+// coordinator REST helpers (the order book lives outside the per-party SwapClient)
+const coordUrl = (p) => `${DEFAULT_COORD}${p}`;
+const coordGet = async (p) => { const r = await fetch(coordUrl(p)); if (!r.ok) throw new Error((await r.json()).error || r.status); return r.json(); };
+const coordPost = async (p, body) => { const r = await fetch(coordUrl(p), { method: "POST", headers: { "content-type": "application/json" }, body: body ? JSON.stringify(body) : undefined }); if (!r.ok) throw new Error((await r.json()).error || r.status); return r.json(); };
 
 // ── entry ─────────────────────────────────────────────────────────────────────
 async function init() {
@@ -68,16 +73,78 @@ async function init() {
   const q = parseHash();
   if (q.coord && q.id && q.token) return startParticipant({ coordinator: decodeURIComponent(q.coord), id: q.id, token: q.token });
   const resumable = await vault.list().catch(() => []);
+  const book = await coordGet("/offers").catch(() => ({ asks: [], bids: [] }));
   render(h("div", {},
-    screen({
-      title: t("swapWhichWay"), subtitle: t("nonCustodial"),
-      body: [
-        bigChoice(t("haveBtc"), t("haveBtcSub"), () => chooseDirection("btc2qbt")),
-        bigChoice(t("haveQbt"), t("haveQbtSub"), () => chooseDirection("qbt2btc")),
-      ],
-    }),
+    orderBookCard(book),
+    h("div", { class: "card", style: "text-align:center" }, h("a", { href: "#", onclick: (e) => { e.preventDefault(); showCreate(); } }, t("startOwn"))),
     await recoverCard(resumable),
   ));
+  scheduleBookRefresh();
+}
+
+// ── order book ────────────────────────────────────────────────────────────────
+function orderBookCard(book) {
+  const card = h("div", { class: "card", id: "orderbook" },
+    h("div", { style: "display:flex;justify-content:space-between;align-items:center" }, h("h2", { style: "margin:0" }, t("orderBook")),
+      h("button", { class: "copy", onclick: () => init() }, t("refreshBook"))));
+  const section = (label, offers, action) => h("div", {},
+    h("h3", { style: "font-size:12px;color:var(--mut);text-transform:uppercase;letter-spacing:.5px;margin:14px 0 2px" }, label),
+    ...(offers.length ? offers.map((o) => offerRow(o, action)) : [h("p", { class: "note" }, t("noOffers"))]));
+  card.append(section(t("buyQbt"), book.asks || [], "buy"), section(t("sellQbt"), book.bids || [], "sell"));
+  return card;
+}
+function offerRow(o, action) {
+  const btn = h("button", { class: "primary", style: "padding:6px 16px", onclick: () => takeAndStart(o, action) }, action === "buy" ? t("buyBtn") : t("sellBtn"));
+  return h("div", { style: "display:flex;align-items:center;justify-content:space-between;gap:10px;padding:9px 0;border-top:1px solid var(--line)" },
+    h("div", {}, h("span", { style: "font-weight:600" }, `${sats(o.qbtSats)} QBT`), h("span", { class: "note", style: "margin-left:10px" }, `${o.price.toFixed(4)} ${t("perQbt")}`)),
+    h("div", { style: "display:flex;align-items:center;gap:14px" }, h("span", { class: "note" }, `${sats(o.btcSats)} BTC`), btn));
+}
+function scheduleBookRefresh() {
+  clearInterval(window._bookTimer);
+  window._bookTimer = setInterval(async () => {
+    const el = document.getElementById("orderbook");
+    if (!el) return clearInterval(window._bookTimer);          // left the landing
+    try { const book = await coordGet("/offers"); const fresh = orderBookCard(book); el.replaceWith(fresh); } catch {}
+  }, 6000);
+}
+async function takeAndStart(o, action) {
+  try {
+    const take = await coordPost(`/offers/${o.id}/take`);       // { swapId, takerToken, direction, terms }
+    clearInterval(window._bookTimer);
+    flow.mode = "take"; flow.takeAction = action; flow.direction = take.direction;
+    flow.btcSats = take.terms.btcSats; flow.qbtSats = take.terms.qbtSats;
+    flow.takeSwapId = take.swapId; flow.takeToken = take.takerToken; flow.receiveAddr = ""; flow.refundAddr = "";
+    stepTakeConfirm();
+  } catch (e) { alert(e.message); }
+}
+function stepTakeConfirm() {
+  rerender = stepTakeConfirm;
+  const summary = flow.takeAction === "buy" ? t("buyingSummary", { qbt: sats(flow.qbtSats), btc: sats(flow.btcSats) }) : t("sellingSummary", { qbt: sats(flow.qbtSats), btc: sats(flow.btcSats) });
+  render(screen({
+    title: flow.takeAction === "buy" ? t("buyQbt") : t("sellQbt"),
+    body: [h("div", { class: "fund" }, h("div", { style: "font-size:16px;font-weight:600" }, summary)), h("p", { class: "note" }, t("confirmP3"))],
+    cta: t("continue"), onCta: () => stepReceive(),
+    back: () => init(),
+  }));
+}
+async function doTake() {
+  flow.client = new SwapClient({ coordinator: flow.coordinator || DEFAULT_COORD });
+  await flow.client.enter({ id: flow.takeSwapId, token: flow.takeToken, direction: flow.direction, role: "alice", ...destsForClient() });
+  await vault.save(flow.client.secrets());
+  stepBackup(() => startLive());
+}
+
+// The peer-to-peer create flow (reached via "start your own swap").
+function showCreate() {
+  rerender = showCreate;
+  render(screen({
+    title: t("swapWhichWay"), subtitle: t("nonCustodial"),
+    body: [
+      bigChoice(t("haveBtc"), t("haveBtcSub"), () => chooseDirection("btc2qbt")),
+      bigChoice(t("haveQbt"), t("haveQbtSub"), () => chooseDirection("qbt2btc")),
+    ],
+    back: () => init(),
+  }));
 }
 
 async function recoverCard(ids) {
@@ -138,7 +205,7 @@ function stepReceive() {
     title: t("receiveTitle", { coin: recv }), subtitle: t("receiveSub", { coin: recv }),
     body: [inp], cta: t("continue"),
     onCta: () => { if (!inp.value.trim()) throw new Error(t("errEnterAddr", { coin: recv })); flow.receiveAddr = inp.value.trim(); stepRefund(); },
-    back: flow.mode === "create" ? () => stepAmount() : () => stepInvited(),
+    back: flow.mode === "create" ? () => stepAmount() : flow.mode === "take" ? () => stepTakeConfirm() : () => stepInvited(),
   }));
 }
 
@@ -147,13 +214,14 @@ function stepRefund() {
   const { send } = roleCoins();
   const inp = field(t("refundPlaceholder", { coin: send }));
   if (flow.refundAddr) inp.value = flow.refundAddr; else prefill(inp, send);
+  const cta = flow.mode === "create" ? t("createSwap") : flow.mode === "take" ? (flow.takeAction === "buy" ? t("buyNow") : t("sellNow")) : t("joinSwap");
   render(screen({
     title: t("refundTitle", { coin: send }), subtitle: t("refundSub"),
-    body: [inp], cta: flow.mode === "create" ? t("createSwap") : t("joinSwap"),
+    body: [inp], cta,
     onCta: async () => {
       if (!inp.value.trim()) throw new Error(t("errEnterAddr", { coin: send }));
       flow.refundAddr = inp.value.trim();
-      flow.mode === "create" ? await doCreate() : await doJoin();
+      flow.mode === "create" ? await doCreate() : flow.mode === "take" ? await doTake() : await doJoin();
     },
     back: () => stepReceive(),
   }));
@@ -283,13 +351,14 @@ function renderLive(card, v) {
   if (terminal) vault.purge(v.id).catch(() => {});
 }
 function statusLine(v, send, recv) {
-  if (!v.htlc) return flow.mode === "create" ? t("stWaitJoin") : t("stSetup");
+  const initiator = flow.mode !== "join";   // create or take
+  if (!v.htlc) return initiator ? t("stWaitJoin") : t("stSetup");
   switch (v.state) {
     case "COMPLETE": return t("stReceived", { amt: sats(coinSats(recv)), coin: recv });
     case "REFUNDED": return t("stReturned", { coin: send });
-    case "CLAIMABLE": return flow.mode === "create" ? t("stBothFunded") : t("stWaitClaim");
+    case "CLAIMABLE": return initiator ? t("stBothFunded") : t("stWaitClaim");
     case "MATURING": return t("stMaturing");
-    case "CLAIMED": return flow.mode === "create" ? t("stClaimed") : t("stPreimage");
+    case "CLAIMED": return initiator ? t("stClaimed") : t("stPreimage");
     default: return v.funding?.[coinLeg(send)] ? t("stWaitFund") : t("stWaitDeposit");
   }
 }

@@ -66,11 +66,18 @@ const en = {
   stPreimage: "Preimage revealed — claiming your funds automatically…",
   stWaitFund: "Waiting for your counterparty to fund their side…",
   stWaitDeposit: "Waiting for your deposit…",
-  stWaitJoin: "Waiting for your counterparty to open the link and join…",
+  stWaitJoin: "Waiting for your counterparty to join…",
   stSetup: "Setting up the swap…",
   loadingSwap: "Loading swap…", fetchingTerms: "fetching terms",
   errEnterAddr: "enter a {coin} address",
   errReadBackup: "Could not read backup: {msg}", errRestore: "Could not restore: {msg}",
+  // order book
+  orderBook: "Order book", buyQbt: "Buy QBT", sellQbt: "Sell QBT",
+  colLot: "Lot", colPrice: "Price", colTotal: "Total", buyBtn: "Buy", sellBtn: "Sell",
+  noOffers: "No open offers right now — check back soon, or start your own swap below.",
+  refreshBook: "Refresh", startOwn: "Or start your own peer-to-peer swap",
+  buyingSummary: "You buy {qbt} QBT for {btc} BTC", sellingSummary: "You sell {qbt} QBT for {btc} BTC",
+  buyNow: "Buy now", sellNow: "Sell now", perQbt: "BTC/QBT",
 };
 const zh = {
   tagline: "非托管原子兑换 BTC ⇄ QBT · 密钥保存在您的浏览器中",
@@ -131,11 +138,18 @@ const zh = {
   stPreimage: "原像已公开——正在自动领取您的资金…",
   stWaitFund: "正在等待对手方注资…",
   stWaitDeposit: "正在等待您的存入…",
-  stWaitJoin: "正在等待对手方打开链接并加入…",
+  stWaitJoin: "正在等待对手方加入…",
   stSetup: "正在设置兑换…",
   loadingSwap: "正在加载兑换…", fetchingTerms: "正在获取交易条款",
   errEnterAddr: "请输入 {coin} 地址",
   errReadBackup: "无法读取备份：{msg}", errRestore: "无法恢复：{msg}",
+  // order book
+  orderBook: "订单簿", buyQbt: "买入 QBT", sellQbt: "卖出 QBT",
+  colLot: "数量", colPrice: "价格", colTotal: "总额", buyBtn: "买入", sellBtn: "卖出",
+  noOffers: "暂无挂单——请稍后再来，或在下方发起您自己的兑换。",
+  refreshBook: "刷新", startOwn: "或发起您自己的点对点兑换",
+  buyingSummary: "您用 {btc} BTC 买入 {qbt} QBT", sellingSummary: "您卖出 {qbt} QBT 换取 {btc} BTC",
+  buyNow: "立即买入", sellNow: "立即卖出", perQbt: "BTC/QBT",
 };
 const DICTS = { en, zh };
 export const LANGS = [["en", "EN"], ["zh", "中文"]];

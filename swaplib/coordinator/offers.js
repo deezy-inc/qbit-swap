@@ -1,0 +1,54 @@
+// Order book on top of the swap engine. A maker posts an offer (one lot): "I give X, I want Y". The
+// book is public; a taker clicks an offer to take it, which instantiates a swap from the offer's terms
+// with the TAKER as the initiator (holds the secret, funds first). The maker retrieves the take with
+// its maker token and fulfills the other side. The coordinator stays keyless — an offer holds no keys.
+//
+// Pair orientation: QBT priced in BTC (price = BTC per QBT).
+//   ask = maker sells QBT for BTC (gives QBT, wants BTC)   — a taker "buys QBT"
+//   bid = maker buys QBT with BTC (gives BTC, wants QBT)   — a taker "sells QBT"
+import { randomBytes } from "node:crypto";
+import { createSwap } from "./swap.js";
+
+const offers = new Map();
+const token = () => randomBytes(16).toString("hex");
+const COINS = new Set(["BTC", "QBT"]);
+
+export function createOffer({ giveCoin, giveSats, wantCoin, wantSats }) {
+  if (!COINS.has(giveCoin) || !COINS.has(wantCoin) || giveCoin === wantCoin) throw new Error("pair must be one of BTC/QBT for each side");
+  if (!(giveSats > 0) || !(wantSats > 0)) throw new Error("giveSats and wantSats required");
+  const qbtSats = giveCoin === "QBT" ? giveSats : wantSats;
+  const btcSats = giveCoin === "BTC" ? giveSats : wantSats;
+  const o = {
+    id: token(), makerToken: token(),
+    side: giveCoin === "QBT" ? "ask" : "bid",
+    giveCoin, giveSats, wantCoin, wantSats,
+    qbtSats, btcSats, price: btcSats / qbtSats,   // BTC per QBT
+    status: "open", createdAt: Date.now(), take: null,
+  };
+  offers.set(o.id, o);
+  return o;
+}
+export const getOffer = (id) => offers.get(id);
+export const isMaker = (o, tok) => tok && tok === o.makerToken;
+
+const publicFields = (o) => ({ id: o.id, side: o.side, giveCoin: o.giveCoin, giveSats: o.giveSats, wantCoin: o.wantCoin, wantSats: o.wantSats, qbtSats: o.qbtSats, btcSats: o.btcSats, price: o.price, createdAt: o.createdAt });
+// Public book: open offers, best price first (asks ascending, bids descending).
+export function book() {
+  const open = [...offers.values()].filter((o) => o.status === "open").map(publicFields);
+  const asks = open.filter((o) => o.side === "ask").sort((a, b) => a.price - b.price);
+  const bids = open.filter((o) => o.side === "bid").sort((a, b) => b.price - a.price);
+  return { asks, bids };
+}
+
+// Take an open offer -> instantiate a swap. Taker = initiator (alice); maker = participant (bob).
+export function takeOffer(o) {
+  if (o.status !== "open") throw new Error("offer is not open");
+  const direction = o.wantCoin === "BTC" ? "btc2qbt" : "qbt2btc";   // taker sends what the maker wants
+  const swap = createSwap({ btcSats: o.btcSats, qbtSats: o.qbtSats, securityLevel: "high", direction });
+  o.status = "taken";
+  o.take = { swapId: swap.id, makerSwapToken: swap.tokens.bob, takenAt: Date.now() };
+  return { swapId: swap.id, takerToken: swap.tokens.alice, direction, terms: swap.terms };
+}
+export function cancelOffer(o) { if (o.status === "open") o.status = "cancelled"; return o; }
+// Maker view (auth'd): includes the take so the maker can fulfill (its swap token).
+export const makerView = (o) => ({ id: o.id, side: o.side, status: o.status, giveCoin: o.giveCoin, giveSats: o.giveSats, wantCoin: o.wantCoin, wantSats: o.wantSats, price: o.price, take: o.take });

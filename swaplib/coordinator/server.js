@@ -3,6 +3,7 @@
 // Live updates over Server-Sent Events (GET /swaps/:id/events). Basic per-IP rate limiting.
 import http from "node:http";
 import { createSwap, getSwap, roleOf, submitParty, broadcast, view, poll, allSwaps, subscribe, markSeen, addConnection, dropConnection, sweepPresence } from "./swap.js";
+import { createOffer, getOffer, isMaker, book, takeOffer, cancelOffer, makerView } from "./offers.js";
 import { btc } from "./chain.js";
 
 const json = (res, code, body) => { res.writeHead(code, { "content-type": "application/json" }); res.end(JSON.stringify(body)); };
@@ -46,6 +47,21 @@ async function handle(req, res) {
       if (!(b.btcSats > 0) || !(b.qbtSats > 0)) return json(res, 400, { error: "btcSats and qbtSats required" });
       const s = createSwap({ btcSats: b.btcSats, qbtSats: b.qbtSats, securityLevel: b.securityLevel, direction: b.direction });
       return json(res, 201, { id: s.id, tokens: s.tokens });   // Alice shares tokens.bob as Bob's link
+    }
+
+    // ── order book ────────────────────────────────────────────────────────────
+    if (parts[0] === "offers") {
+      if (method === "GET" && !parts[1]) return json(res, 200, book());                          // public book
+      if (method === "POST" && !parts[1]) { const o = createOffer(await readBody(req)); return json(res, 201, { id: o.id, makerToken: o.makerToken }); }
+      if (parts[1]) {
+        const o = getOffer(parts[1]);
+        if (!o) return json(res, 404, { error: "no such offer" });
+        if (method === "POST" && parts[2] === "take") return json(res, 201, takeOffer(o));        // anyone can take
+        const mtok = req.headers["x-maker-token"] || url.searchParams.get("makerToken") || "";     // maker-only below
+        if (!isMaker(o, mtok)) return json(res, 401, { error: "maker token required" });
+        if (method === "GET" && !parts[2]) return json(res, 200, makerView(o));
+        if (method === "POST" && parts[2] === "cancel") return json(res, 200, makerView(cancelOffer(o)));
+      }
     }
 
     if (parts[0] === "swaps" && parts[1]) {

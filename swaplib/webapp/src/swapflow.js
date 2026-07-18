@@ -66,6 +66,13 @@ export class SwapClient {
     this.direction = v.direction;
     return { id, direction: v.direction };
   }
+  // Enter an already-created swap (e.g. one instantiated by taking an order-book offer) in a given role.
+  async enter({ id, token, direction, role, btcDest, qbitDest }) {
+    this.role = role; this.direction = direction; this.id = id; this.token = token; this.btcDest = btcDest; this.qbitDest = qbitDest;
+    await this.#freshKeys(role === "alice");
+    await this.#submit();
+    return { id };
+  }
   #submit() {
     const body = { qbitPub: hex(this.qbit.pk), btcPub: hex(compressedPub(this.btcPriv)), btcDest: this.btcDest, qbitDest: this.qbitDest };
     if (this.role === "alice") body.H = hex(this.H);
