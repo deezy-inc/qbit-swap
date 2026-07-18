@@ -8,7 +8,9 @@
     "test": "node test/keystore.test.mjs"
   },
   "dependencies": {
-    "@qbit-swap/client": "file:../js"
+    "@qbit-swap/client": "file:../js",
+    "@noble/hashes": "^2.2.0",
+    "@noble/secp256k1": "^3.1.0"
   },
   "devDependencies": {
     "esbuild": "^0.24.0",
