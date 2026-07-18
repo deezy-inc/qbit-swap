@@ -63,14 +63,24 @@ Set the coordinator URL in the create form (or `window.QBIT_COORDINATOR`).
   the coordinator's — a derivation bug (or tampering) that produced a script it can't claim/refund halts
   the swap before any funds move (`SwapClient.verifyHtlc`).
 - **Address validation:** receive/refund addresses are checked to be a valid address *on the right chain*
-  (`addressCoin`), so a BTC address can't be entered where a QBT one is needed (which would send funds to
-  an unspendable cross-chain output).
+  (`addressCoin`) **and the right network** (`addressOnNetwork` — a deploy sets `window.QBIT_HRPS`, e.g.
+  `{btc:"bc",qbit:"qb"}` for mainnet). So a BTC address can't be entered where a QBT one is needed, **and**
+  a testnet/regtest address pasted into a mainnet swap is rejected — either would otherwise send funds to
+  an output the swap can't spend.
 - **Underfunding:** the coordinator only counts a leg as funded once the deposit meets the agreed amount,
   so a counterparty can't underfund their HTLC and short the other side.
 - **Single-use link:** the first party to join a trade link claims the participant slot; a second person
   opening the same link is rejected rather than racing to replace them.
 - One backup file protects one swap; losing it before settling can only ever lose that single swap
   (ephemeral keys, no shared seed) — and a stalled swap refunds. Backups are plaintext for now.
-- **Not yet:** the counterparty's pubkey is currently taken on trust from the coordinator — a malicious
-  coordinator could MITM the pubkey exchange. Mitigation (planned): an out-of-band SAS/fingerprint the
-  two parties compare before funding. Also: timelocks are tuned per chain block-time before mainnet.
+
+### Trust assumptions
+- **The coordinator is trusted to relay the counterparty's pubkey honestly.** The client verifies each
+  HTLC is built from its *own* keys, but it takes the *counterparty's* pubkey as reported by the
+  coordinator. A malicious operator could therefore MITM the pubkey exchange and steal after the preimage
+  is revealed. This is out of scope for the current model (honest-but-keyless coordinator); it does **not**
+  apply to a coordinator bug — those are caught by the HTLC self-verification above. Closing it fully
+  would need an out-of-band SAS/fingerprint the two parties compare before funding (à la Signal safety
+  numbers). Not implemented.
+- **Timelocks** are currently `+20/+40` blocks; before mainnet they must be tuned in wall-clock per chain
+  (BTC ~10 min vs QBT ~60 s blocks) so the claim window survives a fee spike + a few RBF rounds.

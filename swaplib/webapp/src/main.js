@@ -7,14 +7,28 @@ import { exportBackup, importBackup, Vault } from "./keystore.js";
 import { t, getLang, setLang, LANGS } from "./i18n.js";
 import { addressToScriptPubKey, addressCoin } from "@qbit-swap/client";
 
-// Validate a receiving/refund address: non-empty, decodable, and on the RIGHT chain — a BTC address
-// where a QBT one is needed (or vice versa) would send funds to an unspendable cross-chain output.
+// Expected network per coin (bech32 hrp). Regtest by default; a mainnet deploy injects
+// window.QBIT_HRPS = { btc: "bc", qbit: "qb" } (testnet: "tb" / a qbit testnet hrp).
+const HRPS = globalThis.QBIT_HRPS || { btc: "bcrt", qbit: "qbrt" };
+const KNOWN_HRPS = ["bcrt", "bc", "tb", "sb", "qbrt", "qbt", "tqb", "qb"];
+// Is `addr` on the specific network `expectedHrp`? bech32 by hrp; btc legacy base58 by mainnet-vs-test.
+function addressOnNetwork(addr, expectedHrp) {
+  const a = addr.trim(), l = a.toLowerCase(), sep = l.lastIndexOf("1");
+  if (sep > 0) { const hrp = l.slice(0, sep); if (KNOWN_HRPS.includes(hrp)) return hrp === expectedHrp; }
+  const mainnet = expectedHrp === "bc";                       // btc legacy: 1/3 = mainnet, m/n/2 = test/regtest
+  if (/^[13]/.test(a)) return mainnet;
+  if (/^[mn2]/.test(a)) return !mainnet;
+  return false;
+}
+// Validate a receiving/refund address: non-empty, decodable, the right CHAIN (a BTC address where a QBT
+// one is needed would send funds to an unspendable cross-chain output), and the right NETWORK (a testnet
+// address on a mainnet swap would be unspendable by the intended wallet).
 function validAddr(value, coin) {
   const a = (value || "").trim();
   if (!a) throw new Error(t("errEnterAddr", { coin }));
   const want = coin === "BTC" ? "btc" : "qbit";
   let ok = false;
-  try { addressToScriptPubKey(a); ok = addressCoin(a) === want; } catch { ok = false; }
+  try { addressToScriptPubKey(a); ok = addressCoin(a) === want && addressOnNetwork(a, HRPS[want]); } catch { ok = false; }
   if (!ok) throw new Error(t("errBadAddr", { coin }));
   return a;
 }

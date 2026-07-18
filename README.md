@@ -5,8 +5,10 @@
 Non-custodial atomic swaps between **Bitcoin (BTC)** and **Qbit (QBT)** — a post-quantum Bitcoin fork
 (SLH-DSA signatures, `p2mr` witness-v2 addresses). Users trade peer-to-peer through a **keyless
 coordinator**: all keys are ephemeral and generated in the user's browser, all signing happens
-client-side, and the coordinator only watches the chains and relays party-signed transactions. It can
-never move or lose funds; a stalled swap always refunds.
+client-side, and the coordinator only watches the chains and relays party-signed transactions. It holds
+no keys and can't move funds on its own; a stalled swap always refunds. (One trust assumption remains —
+it's relied on to relay each party's pubkey honestly; see `swaplib/webapp/README.md` › Trust
+assumptions.)
 
 > Bitcoin ↔ Qbit can't use a shared-Schnorr construction (Qbit signs with SLH-DSA, not Schnorr), so
 > this uses a classic hash-timelock (Tier-Nolan) atomic swap: one preimage links both legs.
@@ -39,6 +41,34 @@ The coordinator gates the initiator's claim on **reorg-safe confirmations** via 
 The default experience is **peer-to-peer** (share a private link with a counterparty). An optional
 maker/taker **order book** — makers post offers, takers click to buy/sell — exists behind a web-app
 feature flag (`window.QBIT_ORDERBOOK`, default off) with coordinator support in `offers.js`.
+
+## Watchtower — finishing swaps when a party goes offline
+
+An atomic swap has a hard requirement: once the initiator reveals `s`, the participant **must** claim
+before their timelock, or the initiator could refund and take both sides. So a party who closes their
+tab at the wrong moment could lose out. The watchtower removes that risk **without any custody**.
+
+**The key insight:** a signature over a claim/refund transaction does **not** cover the preimage — the
+preimage is a separate witness element the script checks at spend time. So the transactions can be
+*pre-signed* and handed to a watchtower that can only ever complete them **to the party's own address**.
+
+Once both legs are funded, each browser automatically pre-signs and uploads (`POST /swaps/:id/finish`):
+
+- a **fee-ladder claim** of the leg it receives — several tiers at increasing feerates (the participant
+  signs it *preimage-less*, with an empty slot the coordinator fills once `s` is public); and
+- a **refund** of the leg it funded.
+
+The coordinator (`swap.js` `driveWatchtower` + `fees.js`) then acts **only for a party that has actually
+gone offline** (presence, ~15 s grace, so it never races a live client): it broadcasts the initiator's
+claim when the leg matures (revealing `s`), splices `s` into the participant's pre-signed claim and
+broadcasts it, or broadcasts a refund after the timelock on abort. It picks/escalates ladder tiers using
+cached **mempool.space** feerates (full-RBF is the network default, so no RBF signaling is needed).
+
+**Non-custodial:** every stored transaction is already signed to pay only its owner's address, and the
+coordinator holds no keys — the worst it can do is fail to help, never redirect funds. With both parties
+armed, a swap runs to completion or refund with **nobody's tab open**. The web app requires this
+pre-signing before it tells you it's safe to close (`swaplib/webapp/README.md`); proven end to end in
+`swaplib/webapp/test/watchtower.e2e.mjs`.
 
 ## Backends (what infrastructure you need)
 

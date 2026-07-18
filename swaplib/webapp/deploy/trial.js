@@ -18,7 +18,7 @@ const MIME = { ".html": "text/html", ".js": "text/javascript", ".mjs": "text/jav
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // Same-origin config: the app talks to /coord and /faucet on its own origin (no CORS, no mixed content).
-const CONFIG = `<script>window.QBIT_COORDINATOR=${JSON.stringify(`${PUBLIC_URL}/coord`)};window.QBIT_TRIAL_FAUCET=${JSON.stringify(`${PUBLIC_URL}/faucet`)};</script>`;
+const CONFIG = `<script>window.QBIT_COORDINATOR=${JSON.stringify(`${PUBLIC_URL}/coord`)};window.QBIT_TRIAL_FAUCET=${JSON.stringify(`${PUBLIC_URL}/faucet`)};window.QBIT_HRPS={"btc":"bcrt","qbit":"qbrt"};</script>`;
 
 function proxy(req, res, port, path) {
   const up = http.request({ host: "127.0.0.1", port, method: req.method, path, headers: { ...req.headers, host: `127.0.0.1:${port}` } }, (r) => { res.writeHead(r.statusCode, r.headers); r.pipe(res); });
