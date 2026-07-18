@@ -2,7 +2,7 @@
 // drive swaps through the same endpoints. Auth is a per-party capability token (X-Swap-Token).
 // Live updates over Server-Sent Events (GET /swaps/:id/events). Basic per-IP rate limiting.
 import http from "node:http";
-import { createSwap, getSwap, roleOf, submitParty, broadcast, view, poll, allSwaps, subscribe, markSeen, addConnection, dropConnection, sweepPresence } from "./swap.js";
+import { createSwap, getSwap, roleOf, submitParty, broadcast, view, poll, allSwaps, subscribe, markSeen, addConnection, dropConnection, sweepPresence, submitFinish, driveWatchtower } from "./swap.js";
 import { createOffer, getOffer, isMaker, book, takeOffer, cancelOffer, makerView } from "./offers.js";
 import { btc } from "./chain.js";
 
@@ -79,6 +79,7 @@ async function handle(req, res) {
         const r = await broadcast(s, b.leg, b.kind, b.tx);
         return json(res, 200, r);
       }
+      if (method === "POST" && parts[2] === "finish") { submitFinish(s, role, await readBody(req)); return json(res, 200, { armed: true }); }
     }
     return json(res, 404, { error: "not found" });
   } catch (e) { return json(res, 400, { error: String(e.message || e) }); }
@@ -86,7 +87,10 @@ async function handle(req, res) {
 
 let watching = false;
 async function watchTick() {
-  for (const s of allSwaps()) { try { await poll(s); } catch { /* transient chain error */ } }
+  for (const s of allSwaps()) {
+    try { await poll(s); } catch { /* transient chain error */ }
+    try { await driveWatchtower(s); } catch { /* transient */ }
+  }
 }
 // Purge settled swaps' descriptors from the BTC watch-only wallet (rpc/pruned-node backend) so it
 // doesn't grow unbounded. A descriptor is KEPT while its swap could still need watching:

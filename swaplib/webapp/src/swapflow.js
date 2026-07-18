@@ -105,6 +105,10 @@ export class SwapClient {
 
   async #act(v) {
     if (!v.htlc) return;
+    // Arm the coordinator watchtower once BOTH legs are funded: pre-sign a fee-ladder claim + a refund
+    // so the swap completes/refunds even if this tab closes. Non-custodial — pays only our addresses.
+    if (!this.armed && v.funding?.btc && v.funding?.qbit) { try { await this.armSafetyNet(v); } catch { /* retry next tick */ } }
+
     const done = (k) => this.acted.has(k) || v.broadcasts?.[k];
     const { claim, refund } = this.legs(v);
     if (this.role === "alice") {
@@ -117,25 +121,48 @@ export class SwapClient {
   }
   #send(leg, kind, tx) { this.acted.add(`${leg}:${kind}`); return this.#api(`/swaps/${this.id}/broadcast`, { token: this.token, method: "POST", body: { leg, kind, tx: hex(tx) } }); }
 
-  // ── signing (leg-generic; uses this party's own keys + destinations) ─────────
-  #claim(v, leg, preimage) { return leg === "qbit" ? this.#qbitSpend(v, "claim", preimage) : this.#btcSpend(v, "claim", preimage); }
-  #refund(v, leg) { return leg === "qbit" ? this.#qbitSpend(v, "refund") : this.#btcSpend(v, "refund"); }
+  // ── watchtower safety net: pre-sign and upload a fee-ladder claim + a refund ──
+  async armSafetyNet(v) {
+    if (this.armed || !v.htlc || !v.funding?.btc || !v.funding?.qbit) return;
+    const { claim, refund } = this.legs(v);
+    // participant signs the claim preimage-LESS (the coordinator splices the preimage in on reveal).
+    const claimPreimage = this.role === "alice" ? this.secret : new Uint8Array(0);
+    const tiers = await Promise.all(LADDER[claim].map(async (feerate) =>
+      ({ feerate, tx: hex(await this.#build(v, claim, "claim", claimPreimage, feeFor(claim, "claim", feerate))) })));
+    const refundFeerate = LADDER[refund][Math.floor(LADDER[refund].length / 2)];
+    const refundTx = hex(await this.#build(v, refund, "refund", new Uint8Array(0), feeFor(refund, "refund", refundFeerate)));
+    await this.#api(`/swaps/${this.id}/finish`, { token: this.token, method: "POST", body: {
+      claim: { leg: claim, needsPreimage: this.role !== "alice", tiers },
+      refund: { leg: refund, tx: refundTx },
+    } });
+    this.armed = true;   // the coordinator now reflects safetyNet.self=true in the view
+  }
 
-  async #qbitSpend(v, kind, preimage) {
+  // ── signing (leg-generic; build a tx at a given fee, then optionally broadcast) ──
+  #build(v, leg, kind, preimage, feeSats) { return leg === "qbit" ? this.#buildQbit(v, kind, preimage, feeSats) : this.#buildBtc(v, kind, preimage, feeSats); }
+  async #claim(v, leg, preimage) { return this.#send(leg, "claim", await this.#build(v, leg, "claim", preimage, this.feeSats[leg])); }
+  async #refund(v, leg) { return this.#send(leg, "refund", await this.#build(v, leg, "refund", new Uint8Array(0), this.feeSats[leg])); }
+
+  async #buildQbit(v, kind, preimage, feeSats) {
     const f = v.funding.qbit, leaf = bin(v.htlc.qbit.leaf), spk = bin(v.htlc.qbit.spk);
-    const destSpk = addressToScriptPubKey(this.qbitDest), prevoutLE = bin(f.txid).reverse(), outVal = f.amountSats - this.feeSats.qbit;
+    const destSpk = addressToScriptPubKey(this.qbitDest), prevoutLE = bin(f.txid).reverse(), outVal = f.amountSats - feeSats;
     const refund = kind === "refund", lock = refund ? v.locktimes.qbit : 0, seq = refund ? 0xfffffffe : 0xffffffff;
     const sh = p2mrSighash({ version: 2, locktime: lock, vin: [{ txidLE: prevoutLE, vout: f.vout, sequence: seq }], spentOutputs: [{ amount: f.amountSats, spk }], vout: [{ value: outVal, spk: destSpk }], inputIndex: 0, leafScript: leaf });
     const sig = await slhDsaSign(this.qbit.sk, sh);
-    const witIf = refund ? new Uint8Array(0) : preimage;           // ELSE(refund)=empty ; IF(claim)=preimage
+    const witIf = refund ? new Uint8Array(0) : preimage;           // ELSE(refund)=empty ; IF(claim)=preimage (empty placeholder when pre-signing preimage-less)
     const wit = refund ? [sig, witIf, leaf, P2MR_CONTROL_SINGLE_LEAF] : [sig, witIf, Uint8Array.of(0x01), leaf, P2MR_CONTROL_SINGLE_LEAF];
-    const tx = serializeTx({ version: 2, vin: [[prevoutLE, f.vout, new Uint8Array(0), seq]], vout: [[BigInt(outVal), destSpk]], wit: [wit], locktime: lock });
-    return this.#send("qbit", kind, tx);
+    return serializeTx({ version: 2, vin: [[prevoutLE, f.vout, new Uint8Array(0), seq]], vout: [[BigInt(outVal), destSpk]], wit: [wit], locktime: lock });
   }
-  async #btcSpend(v, kind, preimage) {
+  async #buildBtc(v, kind, preimage, feeSats) {
     const f = v.funding.btc, ws = bin(v.htlc.btc.witnessScript), destSpk = addressToScriptPubKey(this.btcDest);
     const branch = kind === "refund" ? "refund" : "claim";
-    const tx = btcSpend({ prevTxidLE: bin(f.txid).reverse(), vout: f.vout, amount: f.amountSats, ws, priv: this.btcPriv, destSpk, outVal: f.amountSats - this.feeSats.btc, branch, preimage, locktime: branch === "refund" ? v.locktimes.btc : 0 });
-    return this.#send("btc", kind, tx);
+    return btcSpend({ prevTxidLE: bin(f.txid).reverse(), vout: f.vout, amount: f.amountSats, ws, priv: this.btcPriv, destSpk, outVal: f.amountSats - feeSats, branch, preimage, locktime: branch === "refund" ? v.locktimes.btc : 0 });
   }
 }
+
+// Fixed fee ladders (sat/vB) the client pre-signs; the coordinator picks/escalates tiers using live
+// mempool.space feerates. BTC spans economy→extreme; Qbit is uncongested so a low pair suffices.
+const LADDER = { btc: [2, 8, 25, 75, 200], qbit: [1, 5] };
+const VBYTES = { btc: { claim: 150, refund: 120 }, qbit: { claim: 1000, refund: 1000 } };   // rough (SLH-DSA witness dominates the qbit legs)
+const FEE_FLOOR = { btc: 400, qbit: 8000 };
+const feeFor = (leg, kind, feerate) => Math.max(FEE_FLOOR[leg], Math.round(feerate * VBYTES[leg][kind]));

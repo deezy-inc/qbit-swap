@@ -17,8 +17,10 @@ import { bytesToHex as hex, hexToBytes as bin } from "@noble/hashes/utils.js";
 import {
   htlcWitnessScript, p2wshSpk, p2wshAddr,          // BTC leg
   htlcLeafQbit, p2mrSpk, p2mrAddress,               // QBT leg
+  parseTx, serializeTx,                             // for splicing the preimage into a pre-signed claim
 } from "../js/index.js";
 import { qbit, btc } from "./chain.js";
+import { btcFeerates } from "./fees.js";
 
 export const States = ["CREATED", "READY", "FROM_FUNDED", "TO_FUNDED", "MATURING", "CLAIMABLE", "CLAIMED", "COMPLETE", "REFUNDED", "ABORTED"];
 const TERMINAL = ["COMPLETE", "REFUNDED", "ABORTED"];
@@ -48,7 +50,7 @@ export function subscribe(id, cb) {
   subs.get(id).add(cb);
   return () => subs.get(id)?.delete(cb);
 }
-const sigOf = (s) => JSON.stringify({ st: s.state, f: s.funding, r: s.refund, p: s.preimage, b: s.broadcasts });
+const sigOf = (s) => JSON.stringify({ st: s.state, f: s.funding, r: s.refund, p: s.preimage, b: s.broadcasts, fn: [!!s.finish?.alice, !!s.finish?.bob] });
 function emit(s) { for (const cb of subs.get(s.id) || []) { try { cb(s); } catch { /* dead listener */ } } }
 function touch(s) {
   const g = sigOf(s);
@@ -89,6 +91,8 @@ export function createSwap({ btcSats, qbtSats, securityLevel = "high", direction
     funding: { btc: null, qbit: null },
     heights: null, refund: null,
     confsTarget: null, preimage: null,
+    finish: { alice: null, bob: null },    // watchtower: each party's pre-signed { claim(ladder), refund }
+    wt: {},                                // watchtower broadcast tracking (role:kind -> {txid,tier,at})
     broadcasts: {}, createdAt: Date.now(),
   };
   swaps.set(s.id, s);
@@ -175,24 +179,88 @@ export async function poll(s) {
   touch(s);
 }
 
-// A party submits a signed tx; the coordinator broadcasts it (keyless). Any claim may carry the
-// preimage in its witness — extract it so the counterparty can complete. The participant's claim of
-// fromLeg is the final step -> COMPLETE.
+// Post-broadcast state effects, shared by party broadcasts and the watchtower. Any claim may carry the
+// preimage in its witness — extract it so the counterparty can complete. The fromLeg claim (the
+// participant taking the initiator's coin) is the final step -> COMPLETE.
+async function applyEffects(s, leg, kind, txid) {
+  s.broadcasts[`${leg}:${kind}`] = txid;
+  if (kind === "claim") {
+    const wit = (await chainOf(leg).getTx(txid)).vin[0].txinwitness || [];
+    const pre = wit.find((x) => x.length === 64 && hex(sha256(bin(x))) === s.H);
+    if (pre && !s.preimage) s.preimage = pre;
+    if (s.funding[leg]) s.funding[leg].spent = true;
+    if (leg === s.roles.fromLeg) { s.state = "COMPLETE"; s.settledAt = Date.now(); } else s.state = "CLAIMED";
+  }
+  if (kind === "refund") { if (s.funding[leg]) s.funding[leg].spent = true; s.state = "REFUNDED"; s.settledAt = Date.now(); }
+}
+// A party submits a signed tx; the coordinator broadcasts it (keyless).
 export async function broadcast(s, leg, kind, txHex) {
   const chain = chainOf(leg);
   const acc = await chain.testAccept(txHex);
   if (!acc.allowed) throw new Error(`rejected: ${acc.reason}`);
   const txid = await chain.broadcast(txHex);
-  s.broadcasts[`${leg}:${kind}`] = txid;
-  if (kind === "claim") {
-    const wit = (await chain.getTx(txid)).vin[0].txinwitness || [];
-    const pre = wit.find((x) => x.length === 64 && hex(sha256(bin(x))) === s.H);
-    if (pre && !s.preimage) s.preimage = pre;
-    if (s.funding[leg]) s.funding[leg].spent = true;
-    if (leg === s.roles.fromLeg) { s.state = "COMPLETE"; s.settledAt = Date.now(); } else s.state = "CLAIMED";  // fromLeg claim (participant) = done
-  }
-  if (kind === "refund") { if (s.funding[leg]) s.funding[leg].spent = true; s.state = "REFUNDED"; s.settledAt = Date.now(); }
+  await applyEffects(s, leg, kind, txid);
   return { txid, state: touch(s).state };
+}
+
+// ── watchtower ────────────────────────────────────────────────────────────────
+// Each party pre-signs a fee-ladder claim + a refund (`submitFinish`); the coordinator broadcasts them
+// on their behalf so a swap completes/refunds even if both tabs close. Non-custodial: every stored tx
+// pays only its owner's address, and the coordinator holds no keys — it can only help, never redirect.
+export function submitFinish(s, role, bundle) {
+  if (!bundle?.claim?.tiers?.length || !bundle?.refund?.tx) throw new Error("finish bundle needs claim.tiers[] and refund.tx");
+  s.finish[role] = bundle;
+  return touch(s);
+}
+const splicePreimage = (txHex, preimageHex) => { const tx = parseTx(bin(txHex)); tx.wit[0][1] = bin(preimageHex); return hex(serializeTx(tx)); };
+// Pick the cheapest pre-signed tier whose feerate beats the current mempool fastest fee (BTC); qbit or
+// no fee data -> the lowest tier. `minIndex` lets escalation start above a previously-broadcast tier.
+async function pickTier(leg, tiers, minIndex = 0) {
+  if (leg !== "btc") return minIndex;
+  const target = (await btcFeerates()).fastestFee || 1;
+  for (let i = minIndex; i < tiers.length; i++) if (tiers[i].feerate >= target) return i;
+  return tiers.length - 1;
+}
+async function wtSend(s, role, leg, kind, txHex, tier) {
+  const chain = chainOf(leg);
+  const acc = await chain.testAccept(txHex);
+  if (!acc.allowed) return false;                 // already spent, or this tier too low right now — retry next tick/tier
+  const txid = await chain.broadcast(txHex);
+  s.wt[`${role}:${kind}`] = { txid, tier, at: s.heights?.[leg] ?? 0 };
+  await applyEffects(s, leg, kind, txid);
+  return true;
+}
+async function wtClaim(s, role, leg, minTier = 0) {
+  const b = s.finish[role].claim;                 // { leg, needsPreimage, tiers:[{feerate,tx}] }
+  const tier = await pickTier(leg, b.tiers, minTier);
+  const txHex = b.needsPreimage ? splicePreimage(b.tiers[tier].tx, s.preimage) : b.tiers[tier].tx;
+  return wtSend(s, role, leg, "claim", txHex, tier);
+}
+// Called every watcher tick. The watchtower is a FALLBACK: it only acts for a party that's actually
+// OFFLINE (presence, with its ~15s grace) — an online client finishes its own swap, so the watchtower
+// never races it. It drives the swap to completion (or refund) from that party's pre-signed bundle.
+export async function driveWatchtower(s) {
+  if (!s.roles || !s.htlc || ["CREATED", ...TERMINAL].includes(s.state)) return;
+  const { fromLeg, toLeg } = s.roles, H = s.heights || {};
+  const unspent = (leg) => s.funding[leg] && !s.funding[leg].spent;
+  const away = (role) => !isOnline(s, role);   // only step in for a party that has left
+
+  // a) offline initiator's claim of toLeg once matured -> reveals the preimage on-chain
+  if (s.state === "CLAIMABLE" && away("alice") && s.finish.alice?.claim && unspent(toLeg) && !s.wt["alice:claim"]) await wtClaim(s, "alice", toLeg);
+  // b) offline participant's claim of fromLeg once the preimage is public (spliced in)
+  if (s.preimage && away("bob") && s.finish.bob?.claim && unspent(fromLeg) && !s.wt["bob:claim"]) await wtClaim(s, "bob", fromLeg);
+  // c) abort refunds after each leg's timelock (only while no preimage — else the claim path applies)
+  if (!s.preimage && s.locktimes) {
+    if (away("alice") && s.finish.alice?.refund && unspent(fromLeg) && (H[fromLeg] || 0) >= s.locktimes[fromLeg] && !s.wt["alice:refund"]) await wtSend(s, "alice", fromLeg, "refund", s.finish.alice.refund.tx, "r");
+    if (away("bob") && s.finish.bob?.refund && unspent(toLeg) && (H[toLeg] || 0) >= s.locktimes[toLeg] && !s.wt["bob:refund"]) await wtSend(s, "bob", toLeg, "refund", s.finish.bob.refund.tx, "r");
+  }
+  // d) fee escalation: if a broadcast claim fell out of the mempool (leg unspent again) and a higher
+  //    tier exists, bump to it (full-RBF is the network default, so no RBF signaling is needed).
+  for (const [role, leg] of [["alice", toLeg], ["bob", fromLeg]]) {
+    const rec = s.wt[`${role}:claim`], b = s.finish[role]?.claim;
+    if (rec && b && away(role) && unspent(leg) && rec.tier < b.tiers.length - 1) { s.wt[`${role}:claim`] = null; await wtClaim(s, role, leg, rec.tier + 1); }
+  }
+  touch(s);
 }
 
 // The view a party is allowed to see (both legs' public data; preimage only once on-chain).
@@ -203,6 +271,7 @@ export function view(s, role) {
     confsTarget: s.confsTarget, refund: s.refund,
     counterparty: s.party[role === "alice" ? "bob" : "alice"], self: s.party[role],
     counterpartyOnline: isOnline(s, role === "alice" ? "bob" : "alice"), selfOnline: isOnline(s, role),
+    safetyNet: { self: !!s.finish?.[role], counterparty: !!s.finish?.[role === "alice" ? "bob" : "alice"] },
     preimage: s.preimage, broadcasts: s.broadcasts,
   };
 }

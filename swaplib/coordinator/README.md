@@ -23,10 +23,22 @@ headless market-maker **bot** drive it through the same HTTP API.
 - `GET  /swaps/:id/events` — **Server-Sent Events**: the same view pushed on every state change (the
   web app and bots subscribe instead of polling)
 - `POST /swaps/:id/broadcast` — submit `{ leg, kind, tx }` (`kind`: `claim` | `refund`) to broadcast
+- `POST /swaps/:id/finish` — **watchtower**: submit a pre-signed `{ claim: { leg, needsPreimage, tiers:[{feerate,tx}] }, refund: { leg, tx } }` so the coordinator finishes the swap even if you go offline
 
 The watcher surfaces `refund.{qbit,btc}.available` once a funded, still-unspent leg's timelock passes,
 and flags a leg `spent` when its claim/refund lands (via the API or directly) — so a swap that
 resolves out-of-band still reaches a terminal state.
+
+## Watchtower (`swap.js` `driveWatchtower` + `fees.js`)
+Once both legs are funded, each party pre-signs and uploads (`/finish`) a **fee-ladder claim** (several
+feerate tiers) and a **refund**. The coordinator then drives the swap to completion or refund even if
+both tabs close: it broadcasts the initiator's claim when the leg matures (revealing the preimage),
+splices that preimage into the participant's pre-signed claim and broadcasts it, or broadcasts a party's
+refund after its timelock on abort. It picks/escalates ladder tiers using cached mempool.space feerates
+(`fees.js`, `FEES_TTL_MS`). **Non-custodial:** every stored tx pays only its owner's address and the
+coordinator holds no keys — it can only help, never redirect. Full-RBF is the network default, so tiers
+need no RBF signaling. Proven by `../webapp/test/watchtower.e2e.mjs` (both parties arm, close their
+tabs, coordinator finishes).
 
 ## Order book API (optional — `offers.js`)
 A maker/taker layer on top of the swap engine (the web app gates it behind a flag; see its README).

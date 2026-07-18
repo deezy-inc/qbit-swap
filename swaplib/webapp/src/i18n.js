@@ -26,6 +26,7 @@ const en = {
   receiveTitle: "Where would you like to receive your {coin}?",
   receiveSub: "Your counterparty's {coin} is released to this address when the swap completes.",
   receivePlaceholder: "your {coin} receiving address",
+  feeNote: "A small network fee is deducted from the amount you receive, so you'll get slightly less than the quoted amount.",
   refundTitle: "If the swap is cancelled, where would you like your {coin} returned?",
   refundSub: "Only used if the swap doesn't complete — your own deposit comes back to this address.",
   refundPlaceholder: "your {coin} refund address",
@@ -78,6 +79,10 @@ const en = {
   refreshBook: "Refresh", startOwn: "Or start your own peer-to-peer swap", tradePeer: "Trade directly with a peer",
   buyingSummary: "You buy {qbt} QBT for {btc} BTC", sellingSummary: "You sell {qbt} QBT for {btc} BTC",
   buyNow: "Buy now", sellNow: "Sell now", perQbt: "BTC/QBT",
+  // watchtower safety net
+  armingNet: "Setting up your safety net — please don't close this tab yet…",
+  armedNet: "Safety net armed ✓ — you can safely close this tab now; the swap will finish or refund on its own.",
+  leaveWarn: "Your safety net isn't set up yet — if you leave now you'll need to come back to finish or get a refund.",
 };
 const zh = {
   tagline: "非托管原子兑换 BTC ⇄ QBT · 密钥保存在您的浏览器中",
@@ -101,6 +106,7 @@ const zh = {
   receiveTitle: "您希望在哪里接收您的 {coin}？",
   receiveSub: "兑换完成时，对手方的 {coin} 将发送到此地址。",
   receivePlaceholder: "您的 {coin} 接收地址",
+  feeNote: "接收金额会扣除少量网络手续费，因此您实际收到的会略少于报价金额。",
   refundTitle: "如果兑换取消，您希望将您的 {coin} 退回到哪里？",
   refundSub: "仅在兑换未完成时使用——您自己存入的资金将退回此地址。",
   refundPlaceholder: "您的 {coin} 退款地址",
@@ -150,6 +156,10 @@ const zh = {
   refreshBook: "刷新", startOwn: "或发起您自己的点对点兑换", tradePeer: "直接与对手方交易",
   buyingSummary: "您用 {btc} BTC 买入 {qbt} QBT", sellingSummary: "您卖出 {qbt} QBT 换取 {btc} BTC",
   buyNow: "立即买入", sellNow: "立即卖出", perQbt: "BTC/QBT",
+  // watchtower safety net
+  armingNet: "正在设置您的安全网——请暂时不要关闭此标签页…",
+  armedNet: "安全网已启用 ✓——您现在可以安全关闭此标签页；兑换将自动完成或退款。",
+  leaveWarn: "您的安全网尚未设置——如果现在离开，您需要回来才能完成或退款。",
 };
 const DICTS = { en, zh };
 export const LANGS = [["en", "EN"], ["zh", "中文"]];

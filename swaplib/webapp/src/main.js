@@ -12,6 +12,9 @@ const ORDERBOOK = globalThis.QBIT_ORDERBOOK === true;   // feature flag, default
 const appEl = document.getElementById("app");
 const vault = new Vault();
 let rerender = () => init();     // re-invoked on language change to redraw the current screen
+let liveGuard = { risky: false };   // true when funds are committed but the safety net isn't armed yet
+// Warn before leaving if funds are locked but the watchtower isn't armed yet (nothing to finish for you).
+window.addEventListener("beforeunload", (e) => { if (liveGuard.risky) { e.preventDefault(); e.returnValue = t("leaveWarn"); return t("leaveWarn"); } });
 
 // ── coin / direction helpers ──────────────────────────────────────────────────
 const DIR = { btc2qbt: { from: "BTC", to: "QBT" }, qbt2btc: { from: "QBT", to: "BTC" } };
@@ -209,7 +212,7 @@ function stepReceive() {
   if (flow.receiveAddr) inp.value = flow.receiveAddr; else prefill(inp, recv);
   render(screen({
     title: t("receiveTitle", { coin: recv }), subtitle: t("receiveSub", { coin: recv }),
-    body: [inp], cta: t("continue"),
+    body: [inp, h("p", { class: "note" }, t("feeNote"))], cta: t("continue"),
     onCta: () => { if (!inp.value.trim()) throw new Error(t("errEnterAddr", { coin: recv })); flow.receiveAddr = inp.value.trim(); stepRefund(); },
     back: flow.mode === "create" ? () => stepAmount() : flow.mode === "take" ? () => stepTakeConfirm() : () => stepInvited(),
   }));
@@ -339,6 +342,14 @@ function renderLive(card, v) {
     card.append(h("div", { class: "note", style: "display:flex;align-items:center;gap:7px;margin-top:4px" },
       h("span", { style: `display:inline-block;width:9px;height:9px;border-radius:50%;background:${online ? "var(--good)" : "var(--warn)"};box-shadow:0 0 6px ${online ? "var(--good)" : "var(--warn)"}` }),
       online ? t("cpOnline") : t("cpOffline")));
+  }
+  // Safety net: once both legs are funded, the client pre-signs a fee-ladder claim + refund and the
+  // coordinator (watchtower) finishes even if this tab closes. Until armed, warn against leaving.
+  const bothFunded = v.funding?.btc && v.funding?.qbit, armed = v.safetyNet?.self;
+  liveGuard = { risky: !terminal && !!v.funding?.[fundLeg] && !armed };
+  if (!terminal && bothFunded) {
+    card.append(h("div", { class: "note", style: `display:flex;align-items:center;gap:7px;margin-top:4px;color:${armed ? "var(--good)" : "var(--warn)"}` },
+      h("span", {}, armed ? "🛡️" : "⏳"), armed ? t("armedNet") : t("armingNet")));
   }
   if (!terminal && flow.mode === "create" && flow.bobLink) {
     card.append(h("div", { class: "btns", style: "margin-top:8px" }, copyButton("copyInvite", "inviteCopied", () => flow.bobLink)));

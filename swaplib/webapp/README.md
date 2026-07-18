@@ -17,6 +17,10 @@ from wherever you like.
   P2WPKH/P2WSH, P2TR, qbit P2MR, and legacy P2PKH/P2SH).
 - The app drives the swap on the coordinator's live feed (SSE) and **auto-signs** claim/refund. If the
   swap stalls past the timelocks, each side auto-refunds its own deposit.
+- **Watchtower safety net (default):** once both legs are funded, the app pre-signs a fee-ladder claim
+  + a refund and uploads them, so the coordinator finishes (or refunds) the swap even if you close the
+  tab. Until it's armed, the app warns you not to leave (`beforeunload`) — pays only to your addresses,
+  non-custodial. Proven by `test/watchtower.e2e.mjs`.
 - A **live presence indicator** shows whether your counterparty is online (from their SSE/API activity).
 - UI is bilingual (**English / 简体中文**) via `src/i18n.js` — a header switcher, choice persisted.
 
