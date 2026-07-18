@@ -1,0 +1,30 @@
+# Copy to terraform.tfvars and fill in. Secrets land in TF state + EC2 user-data — keep state private
+# (or move secrets to SSM later). Everything below the front-door/tailnet secrets is plain wiring.
+
+# --- box ---
+ssh_public_key    = "ssh-ed25519 AAAA... you@host"   # reach the box over the tailnet with this key
+# ssh_ingress_cidrs = ["1.2.3.4/32"]                 # optional; default [] = no public SSH
+
+# --- Cloudflare Tunnel (create a Named Tunnel in the CF dashboard, route it to http://127.0.0.1:8080) ---
+cloudflared_token = "eyJ...connector-token..."
+public_url        = "https://swap.example.com"       # the tunnel's public hostname
+
+# --- Tailscale ---
+tailscale_authkey = "tskey-auth-..."                 # reusable/ephemeral key
+
+# --- network + chain nodes (over the tailnet) ---
+network      = "testnet"
+qbit_rpc_url = "http://lab:lab@swap-node:18332"  # the DEDICATED keyless swap qbitd (infra/qbit-node)
+
+# BTC: either esplora (no node) ...
+btc_backend = "esplora"
+esplora_url = "https://mempool.space/testnet/api"
+# ... or an own/prune node:
+# btc_backend = "rpc"
+# btc_rpc_url = "http://user:pass@btc-mainnet-prune:8332"
+
+# --- app source (while private) ---
+# github_token = "github_pat_..."                    # omit once the repo is public
+# git_ref      = "main"
+
+# orderbook = false

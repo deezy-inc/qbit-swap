@@ -1,0 +1,88 @@
+#!/bin/bash
+# qbit-swap app box: web app + keyless coordinator, fronted by a Cloudflare Tunnel, reaching the
+# chain nodes over the tailnet. Rendered by Terraform (templatefile) — $${...} are TF values; bash
+# variables are escaped as $$$${...}.
+set -euxo pipefail
+exec > >(tee -a /var/log/qbit-init.log) 2>&1
+export DEBIAN_FRONTEND=noninteractive
+
+apt-get update -y
+apt-get install -y curl git ca-certificates
+
+# ── Node.js 20 ────────────────────────────────────────────────────────────────────────────────
+curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+apt-get install -y nodejs
+
+# ── Tailscale (join the tailnet to reach the node RPCs) ─────────────────────────────────────────
+curl -fsSL https://tailscale.com/install.sh | sh
+tailscale up --authkey='${tailscale_authkey}' --hostname='${tailscale_hostname}' --ssh=false --accept-dns=true
+
+# ── Cloudflare Tunnel connector (egress-only public front door) ─────────────────────────────────
+curl -fsSL https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb -o /tmp/cloudflared.deb
+dpkg -i /tmp/cloudflared.deb
+cloudflared service install '${cloudflared_token}'
+
+# ── App source ──────────────────────────────────────────────────────────────────────────────────
+useradd --system --create-home --home-dir /opt/qbit-swap --shell /usr/sbin/nologin qbit || true
+GH_TOKEN='${github_token}'
+if [ -n "$${GH_TOKEN}" ]; then
+  CLONE_URL="https://x-access-token:$${GH_TOKEN}@github.com/deezy-inc/qbit-swap.git"
+else
+  CLONE_URL='${repo_url}'
+fi
+rm -rf /opt/qbit-swap/src
+git clone --depth 1 --branch '${git_ref}' "$${CLONE_URL}" /opt/qbit-swap/src
+chown -R qbit:qbit /opt/qbit-swap
+
+# ── Build the bundle ────────────────────────────────────────────────────────────────────────────
+sudo -u qbit bash -lc 'cd /opt/qbit-swap/src/swaplib/js && npm install --no-audit --no-fund'
+sudo -u qbit bash -lc 'cd /opt/qbit-swap/src/swaplib/webapp && npm install --no-audit --no-fund && npm run build'
+
+# ── Runtime env + state dir ─────────────────────────────────────────────────────────────────────
+install -d -o qbit -g qbit /var/lib/qbit-swap
+cat > /etc/qbit-swap.env <<'ENVEOF'
+PUBLIC_URL=${public_url}
+NETWORK=${network}
+WEB_BIND=127.0.0.1
+WEB_PORT=8080
+COORD_PORT=8787
+COORD_DB=/var/lib/qbit-swap/state.json
+BTC_BACKEND=${btc_backend}
+BTC_RPC_URL=${btc_rpc_url}
+ESPLORA_URL=${esplora_url}
+BTC_WATCH=${btc_watch}
+QBIT_BACKEND=rpc
+QBIT_RPC_URL=${qbit_rpc_url}
+QBIT_WATCH=${qbit_watch}
+ORDERBOOK=${orderbook}
+ENVEOF
+chmod 640 /etc/qbit-swap.env
+chown root:qbit /etc/qbit-swap.env
+
+# ── systemd service ─────────────────────────────────────────────────────────────────────────────
+cat > /etc/systemd/system/qbit-swap.service <<'UNITEOF'
+[Unit]
+Description=qbit-swap web app + keyless coordinator
+After=network-online.target tailscaled.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=qbit
+WorkingDirectory=/opt/qbit-swap/src/swaplib/webapp
+EnvironmentFile=/etc/qbit-swap.env
+ExecStart=/usr/bin/node deploy/serve.js
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/qbit-swap
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target
+UNITEOF
+
+systemctl daemon-reload
+systemctl enable --now qbit-swap.service
+echo "qbit-swap app box ready — front http://127.0.0.1:8080 with the tunnel."
