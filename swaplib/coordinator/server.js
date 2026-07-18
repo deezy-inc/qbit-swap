@@ -7,7 +7,8 @@ import { createOffer, getOffer, isMaker, book, takeOffer, cancelOffer, makerView
 import { btc } from "./chain.js";
 
 const json = (res, code, body) => { res.writeHead(code, { "content-type": "application/json" }); res.end(JSON.stringify(body)); };
-const readBody = (req) => new Promise((resolve) => { let b = ""; req.on("data", (c) => (b += c)); req.on("end", () => { try { resolve(b ? JSON.parse(b) : {}); } catch { resolve({}); } }); });
+const MAX_BODY = 1 << 20;   // 1 MB — finish bundles (pre-signed txs) are the largest legit input, well under this
+const readBody = (req) => new Promise((resolve) => { let b = ""; req.on("data", (c) => { b += c; if (b.length > MAX_BODY) { req.destroy(); resolve({}); } }); req.on("end", () => { try { resolve(b ? JSON.parse(b) : {}); } catch { resolve({}); } }); });
 
 // ── rate limit: sliding window per IP (protects create + write endpoints) ─────
 const WINDOW_MS = 60_000, MAX_HITS = Number(process.env.RATE_MAX || 120);

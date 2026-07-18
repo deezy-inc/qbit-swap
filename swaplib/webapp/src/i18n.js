@@ -83,6 +83,7 @@ const en = {
   armingNet: "Setting up your safety net — please don't close this tab yet…",
   armedNet: "Safety net armed ✓ — you can safely close this tab now; the swap will finish or refund on its own.",
   leaveWarn: "Your safety net isn't set up yet — if you leave now you'll need to come back to finish or get a refund.",
+  underfundWarn: "⚠ A deposit came in below the agreed amount, so the swap is paused. An underfunded deposit can be refunded after its timelock.",
 };
 const zh = {
   tagline: "非托管原子兑换 BTC ⇄ QBT · 密钥保存在您的浏览器中",
@@ -160,6 +161,7 @@ const zh = {
   armingNet: "正在设置您的安全网——请暂时不要关闭此标签页…",
   armedNet: "安全网已启用 ✓——您现在可以安全关闭此标签页；兑换将自动完成或退款。",
   leaveWarn: "您的安全网尚未设置——如果现在离开，您需要回来才能完成或退款。",
+  underfundWarn: "⚠ 有一笔存入金额低于约定金额，兑换已暂停。金额不足的存入可在其时间锁到期后退款。",
 };
 const DICTS = { en, zh };
 export const LANGS = [["en", "EN"], ["zh", "中文"]];

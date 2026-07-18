@@ -127,8 +127,11 @@ export class SwapClient {
     const { claim, refund } = this.legs(v);
     // participant signs the claim preimage-LESS (the coordinator splices the preimage in on reveal).
     const claimPreimage = this.role === "alice" ? this.secret : new Uint8Array(0);
-    const tiers = await Promise.all(LADDER[claim].map(async (feerate) =>
-      ({ feerate, tx: hex(await this.#build(v, claim, "claim", claimPreimage, feeFor(claim, "claim", feerate))) })));
+    // skip any tier whose fee would leave a dust/negative output (defensive; createSwap already floors amounts)
+    const amount = v.funding[claim].amountSats;
+    const affordable = LADDER[claim].map((fr) => ({ fr, fee: feeFor(claim, "claim", fr) })).filter(({ fee }) => amount - fee > DUST);
+    const tiers = await Promise.all((affordable.length ? affordable : [{ fr: LADDER[claim][0], fee: feeFor(claim, "claim", LADDER[claim][0]) }]).map(async ({ fr, fee }) =>
+      ({ feerate: fr, tx: hex(await this.#build(v, claim, "claim", claimPreimage, fee)) })));
     const refundFeerate = LADDER[refund][Math.floor(LADDER[refund].length / 2)];
     const refundTx = hex(await this.#build(v, refund, "refund", new Uint8Array(0), feeFor(refund, "refund", refundFeerate)));
     await this.#api(`/swaps/${this.id}/finish`, { token: this.token, method: "POST", body: {
@@ -162,6 +165,7 @@ export class SwapClient {
 
 // Fixed fee ladders (sat/vB) the client pre-signs; the coordinator picks/escalates tiers using live
 // mempool.space feerates. BTC spans economy→extreme; Qbit is uncongested so a low pair suffices.
+const DUST = 546;
 const LADDER = { btc: [2, 8, 25, 75, 200], qbit: [1, 5] };
 const VBYTES = { btc: { claim: 150, refund: 120 }, qbit: { claim: 1000, refund: 1000 } };   // rough (SLH-DSA witness dominates the qbit legs)
 const FEE_FLOOR = { btc: 400, qbit: 8000 };

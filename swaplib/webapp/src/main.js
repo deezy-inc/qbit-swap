@@ -364,6 +364,7 @@ function renderLive(card, v) {
   }
 
   card.append(h("p", { class: "note" }, statusLine(v, send, recv)));
+  if (!terminal && v.shortFunded) card.append(h("p", { class: "note", style: "color:var(--bad)" }, t("underfundWarn")));
   if (v.actionError) card.append(h("p", { class: "note", style: "color:var(--bad)" }, "⚠ " + v.actionError));
   if (terminal) vault.purge(v.id).catch(() => {});
 }

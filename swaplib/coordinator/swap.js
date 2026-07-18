@@ -79,8 +79,12 @@ export function sweepPresence() {
   }
 }
 
+const MIN_SATS = { btc: Number(process.env.MIN_BTC_SATS || 50000), qbit: Number(process.env.MIN_QBT_SATS || 200000) };   // above the largest claim/refund fee + dust
 export function createSwap({ btcSats, qbtSats, securityLevel = "high", direction = "btc2qbt" }) {
   if (direction !== "btc2qbt" && direction !== "qbt2btc") throw new Error("bad direction");
+  // Reject dust-level swaps: the amount must comfortably exceed claim/refund fees (incl. the top
+  // watchtower fee tier) or the spend would produce a dust/negative output.
+  if (!(btcSats >= MIN_SATS.btc) || !(qbtSats >= MIN_SATS.qbit)) throw new Error(`amount too small (min ${MIN_SATS.btc} btc / ${MIN_SATS.qbit} qbt sats)`);
   const s = {
     id: token(), tokens: { alice: token(), bob: token() },
     terms: { btcSats, qbtSats, securityLevel, direction },
@@ -160,7 +164,15 @@ export async function poll(s) {
   const H = { qbit: qh, btc: bh };
   const { fromLeg, toLeg } = s.roles;
 
-  for (const leg of ["btc", "qbit"]) if (!s.funding[leg]) { const o = await chainOf(leg).findOutput(s.htlc[leg].spk); if (o) s.funding[leg] = o; }
+  // Only count a leg as funded when the deposit meets the agreed amount — otherwise a counterparty
+  // could underfund their HTLC and short the other side. An underfunded leg is surfaced (shortFunded)
+  // but doesn't progress the swap, so it stalls and the underfunder can refund after the timelock.
+  const need = { btc: s.terms.btcSats, qbit: s.terms.qbtSats };
+  for (const leg of ["btc", "qbit"]) if (!s.funding[leg]) {
+    const o = await chainOf(leg).findOutput(s.htlc[leg].spk);
+    if (o && o.amountSats >= need[leg]) s.funding[leg] = o;
+    else if (o) s.shortFunded = { ...(s.shortFunded || {}), [leg]: { got: o.amountSats, need: need[leg] } };
+  }
   for (const leg of ["btc", "qbit"]) if (s.funding[leg] && !s.funding[leg].spent && !(await chainOf(leg).isUnspent(s.funding[leg].txid, s.funding[leg].vout))) s.funding[leg].spent = true;
 
   const from = s.funding[fromLeg], to = s.funding[toLeg];
@@ -278,6 +290,7 @@ export function view(s, role) {
     counterparty: s.party[role === "alice" ? "bob" : "alice"], self: s.party[role],
     counterpartyOnline: isOnline(s, role === "alice" ? "bob" : "alice"), selfOnline: isOnline(s, role),
     safetyNet: { self: !!s.finish?.[role], counterparty: !!s.finish?.[role === "alice" ? "bob" : "alice"] },
+    shortFunded: s.shortFunded || null,
     preimage: s.preimage, broadcasts: s.broadcasts,
   };
 }
