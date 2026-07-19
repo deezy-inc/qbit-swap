@@ -22,7 +22,7 @@ const en = {
   confirmP1b: "This tool only coordinates the swap and never holds your funds or keys.",
   confirmP2: "Once both sides lock their funds, it settles atomically: either it completes for both of you, or you both get your funds back. Neither side can be cheated.",
   confirmP3: "It can take up to about an hour to confirm on both chains. Keep this tab open until it finishes — and save the backup file so you can resume or get a refund if you close it.",
-  confirmCta: "I've agreed a trade with a counterparty — continue",
+  confirmCta: "I've found a trading partner and agreed to a price quote",
   // amount
   howMuch: "Enter the trade amounts", youSendCoin: "You send ({coin})", youReceiveCoin: "You receive ({coin})",
   amountPlaceholder: "amount in {coin}",
@@ -118,7 +118,7 @@ const zh = {
   confirmP1b: "本工具只负责协调兑换，绝不持有您的资金或密钥。",
   confirmP2: "双方锁定资金后，兑换将原子性结算：要么双方都完成，要么双方都拿回各自的资金。任何一方都无法被欺骗。",
   confirmP3: "两条链上的确认最长可能需要约一小时。请保持此标签页开启直到完成——并保存备份文件，以便关闭后仍能继续或退款。",
-  confirmCta: "我已与对手方达成交易——继续",
+  confirmCta: "我已找到交易伙伴并商定了报价",
   howMuch: "输入交易金额", youSendCoin: "您发送（{coin}）", youReceiveCoin: "您接收（{coin}）",
   amountPlaceholder: "{coin} 数量",
   confirmDiscordPre: "您可以尝试在 ", confirmDiscordLink: "Qbit Discord", confirmDiscordPost: " 中寻找交易伙伴。",
