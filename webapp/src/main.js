@@ -207,7 +207,7 @@ async function recoverCard(ids) {
     card.append(h("button", { class: "primary", style: "width:100%;margin-top:8px", onclick: () => resumeSwap(s) }, t("resumeBtn", { from: DIR[s.direction]?.from, to: DIR[s.direction]?.to, id: shorten(id, 6) })));
   }
   const fileInput = h("input", { type: "file", accept: "application/json", style: "display:none", onchange: async (e) => { const f = e.target.files?.[0]; if (!f) return; try { resumeSwap(importBackup(await f.text())); } catch (err) { alert(t("errReadBackup", { msg: err.message })); } } });
-  card.append(fileInput, h("div", { class: "btns", style: "margin-top:10px" }, h("button", { onclick: () => fileInput.click() }, ids.length ? t("uploadInstead") : t("uploadBackup"))));
+  card.append(fileInput, h("div", { class: "btns", style: "margin-top:10px" }, h("button", { style: "font-size:12.5px; padding:7px 12px", onclick: () => fileInput.click() }, ids.length ? t("uploadInstead") : t("uploadBackup"))));
   return card;
 }
 
