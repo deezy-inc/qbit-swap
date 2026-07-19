@@ -8,9 +8,9 @@ __pycache__/
 
 # compiled C helpers (rebuild from source via build steps in READMEs)
 *.o
-swaplib/pqcsign
-swaplib/pqctool
-swaplib/wasm/*.o
+reference/pqcsign
+reference/pqctool
+reference/wasm/*.o
 
 # coordinator runtime state
 coord-*.json
@@ -18,7 +18,7 @@ coord-*.json
 .agent-notes.md
 
 # webapp build output
-swaplib/webapp/dist/
+webapp/dist/
 
 # local lab config (hosts/creds)
-swaplib/webapp/deploy/lab.env
+webapp/deploy/lab.env

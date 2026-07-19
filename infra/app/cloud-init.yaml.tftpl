@@ -35,8 +35,8 @@ git clone --depth 1 --branch '${git_ref}' "$${CLONE_URL}" /opt/qbit-swap/src
 chown -R qbit:qbit /opt/qbit-swap
 
 # ── Build the bundle ────────────────────────────────────────────────────────────────────────────
-sudo -u qbit bash -lc 'cd /opt/qbit-swap/src/swaplib/js && npm install --no-audit --no-fund'
-sudo -u qbit bash -lc 'cd /opt/qbit-swap/src/swaplib/webapp && npm install --no-audit --no-fund && npm run build'
+sudo -u qbit bash -lc 'cd /opt/qbit-swap/src/client && npm install --no-audit --no-fund'
+sudo -u qbit bash -lc 'cd /opt/qbit-swap/src/webapp && npm install --no-audit --no-fund && npm run build'
 
 # ── Runtime env + state dir ─────────────────────────────────────────────────────────────────────
 install -d -o qbit -g qbit /var/lib/qbit-swap
@@ -77,7 +77,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=qbit
-WorkingDirectory=/opt/qbit-swap/src/swaplib/webapp
+WorkingDirectory=/opt/qbit-swap/src/webapp
 EnvironmentFile=/etc/qbit-swap.env
 ExecStart=/usr/bin/node deploy/serve.js
 Restart=always

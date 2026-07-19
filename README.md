@@ -7,7 +7,7 @@ Non-custodial atomic swaps between **Bitcoin (BTC)** and **Qbit (QBT)** — a po
 coordinator**: all keys are ephemeral and generated in the user's browser, all signing happens
 client-side, and the coordinator only watches the chains and relays party-signed transactions. It holds
 no keys and can't move funds on its own; a stalled swap always refunds. (One trust assumption remains —
-it's relied on to relay each party's pubkey honestly; see `swaplib/webapp/README.md` › Trust
+it's relied on to relay each party's pubkey honestly; see `webapp/README.md` › Trust
 assumptions.)
 
 > Bitcoin ↔ Qbit can't use a shared-Schnorr construction (Qbit signs with SLH-DSA, not Schnorr), so
@@ -17,10 +17,10 @@ assumptions.)
 
 | Path | What it is | Public |
 |---|---|---|
-| `swaplib/js/` | **Client library** (`@qbit-swap/client`) — HTLC construction + sighash + signing for both legs; browser + Node. WASM SLH-DSA signer bundled. | ✅ |
-| `swaplib/coordinator/` | **Keyless coordinator** — Tier-Nolan state machine, reorg-safe confirmation gating, refund side-paths, SSE live feed, presence, pluggable chain backends. | ✅ |
-| `swaplib/webapp/` | **Web app** — a wallet-agnostic, one-decision-per-screen wizard (EN / 简体中文). Ephemeral keys, in-page signing, plaintext backup file. | ✅ |
-| `swaplib/*.py` | Python reference implementation + regtest validation scripts. | ✅ |
+| `client/` | **Client library** (`@qbit-swap/client`) — HTLC construction + sighash + signing for both legs; browser + Node. WASM SLH-DSA signer bundled. | ✅ |
+| `coordinator/` | **Keyless coordinator** — Tier-Nolan state machine, reorg-safe confirmation gating, refund side-paths, SSE live feed, presence, pluggable chain backends. | ✅ |
+| `webapp/` | **Web app** — a wallet-agnostic, one-decision-per-screen wizard (EN / 简体中文). Ephemeral keys, in-page signing, plaintext backup file. | ✅ |
+| `reference/*.py` | Python reference implementation + regtest validation scripts. | ✅ |
 | `infra/` | Terraform for the deployment (app + keyless coordinator behind a Cloudflare Tunnel; dedicated keyless qbitd) + a monitoring dashboard. | ✅ |
 
 Market-maker bots live in a **separate private repo** (they consume `@qbit-swap/client` + the
@@ -67,13 +67,13 @@ cached **mempool.space** feerates (full-RBF is the network default, so no RBF si
 **Non-custodial:** every stored transaction is already signed to pay only its owner's address, and the
 coordinator holds no keys — the worst it can do is fail to help, never redirect funds. With both parties
 armed, a swap runs to completion or refund with **nobody's tab open**. The web app requires this
-pre-signing before it tells you it's safe to close (`swaplib/webapp/README.md`); proven end to end in
-`swaplib/webapp/test/watchtower.e2e.mjs`.
+pre-signing before it tells you it's safe to close (`webapp/README.md`); proven end to end in
+`webapp/test/watchtower.e2e.mjs`.
 
 ## Backends (what infrastructure you need)
 
 The coordinator only does chain **reads + broadcast** (it's keyless). Each chain picks a backend via
-env — see `swaplib/coordinator/chain.js`:
+env — see `coordinator/chain.js`:
 
 - **Qbit — required: your own `qbitd`.** There's no public Qbit backend, and the reorg-safe conf gate
   is a `qbitd` RPC. Use `QBIT_BACKEND=rpc` + `QBIT_RPC_URL=...`.
@@ -97,9 +97,9 @@ env — see `swaplib/coordinator/chain.js`:
 ## Running it (regtest)
 
 Each component has its own README:
-- `swaplib/js/README.md` — client library + browser/Node signer, tests.
-- `swaplib/coordinator/README.md` — API, state machine, backends, demos (`demo.js`, `refund_demo.js`).
-- `swaplib/webapp/README.md` — build the app, run the wizard e2e, the trial deployment.
+- `client/README.md` — client library + browser/Node signer, tests.
+- `coordinator/README.md` — API, state machine, backends, demos (`demo.js`, `refund_demo.js`).
+- `webapp/README.md` — build the app, run the wizard e2e, the trial deployment.
 
 A local regtest lab drives the transport via env (`<CHAIN>_CLI`, optional `<CHAIN>_SSH_HOST`); no
 hostnames are baked into the code.

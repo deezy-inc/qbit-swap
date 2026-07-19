@@ -10,7 +10,7 @@
   "dependencies": {
     "@noble/hashes": "^2.2.0",
     "@noble/secp256k1": "^3.1.0",
-    "@qbit-swap/client": "file:../js"
+    "@qbit-swap/client": "file:../client"
   },
   "devDependencies": {
     "esbuild": "^0.24.0",

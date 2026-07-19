@@ -18,15 +18,15 @@ jobs:
           node-version: '22'
 
       - name: client library — golden vectors (p2mr / sighash / tx / WASM signer)
-        working-directory: swaplib/js
+        working-directory: client
         run: npm install --no-audit --no-fund && npm test
 
       - name: "coordinator — esplora BTC adapter (mocked fetch: mapping + rate-limit retry)"
-        working-directory: swaplib/coordinator
+        working-directory: coordinator
         run: npm install --no-audit --no-fund && npm test
 
       - name: web app — key-store envelope + production bundle build
-        working-directory: swaplib/webapp
+        working-directory: webapp
         run: |
           npm install --no-audit --no-fund
           npm test

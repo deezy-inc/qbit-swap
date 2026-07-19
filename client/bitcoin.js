@@ -1,4 +1,4 @@
-// Bitcoin leg: P2WSH HTLC + BIP143 signing (ECDSA via @noble/secp256k1). Ports swaplib/bitcoin_htlc.py.
+// Bitcoin leg: P2WSH HTLC + BIP143 signing (ECDSA via @noble/secp256k1). Ports reference/bitcoin_htlc.py.
 import { sha256 } from "@noble/hashes/sha2.js";
 import { hmac } from "@noble/hashes/hmac.js";
 import * as secp from "@noble/secp256k1";

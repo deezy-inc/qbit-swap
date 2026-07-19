@@ -9,7 +9,7 @@ import { startServer } from "./server.js";
 import { qbit, btc } from "./chain.js";
 import {
   slhDsaKeygen, slhDsaSign, compressedPub, p2mrSighash, serializeTx, P2MR_CONTROL_SINGLE_LEAF, btcSpend,
-} from "../js/index.js";
+} from "../client/index.js";
 
 const BASE = "http://127.0.0.1:8788";
 const api = async (path, { token, method = "GET", body } = {}) => {

@@ -18,7 +18,7 @@ import {
   htlcWitnessScript, p2wshSpk, p2wshAddr,          // BTC leg
   htlcLeafQbit, p2mrSpk, p2mrAddress,               // QBT leg
   parseTx, serializeTx,                             // for splicing the preimage into a pre-signed claim
-} from "../js/index.js";
+} from "../client/index.js";
 import { qbit, btc } from "./chain.js";
 import { btcFeerates, cachedBtcFeerates, cachedQbitFeerates } from "./fees.js";
 

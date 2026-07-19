@@ -1,5 +1,5 @@
 // Two headless bots drive a full BTC<->QBT swap through the coordinator's HTTP API, signing entirely
-// client-side with the swaplib/js library. Proves the coordinator + the bot-facing API end to end.
+// client-side with the client library. Proves the coordinator + the bot-facing API end to end.
 // Run:  DEV_CONFS_CAP=2 node demo.js
 import { randomBytes } from "node:crypto";
 import { sha256 } from "@noble/hashes/sha2.js";
@@ -9,7 +9,7 @@ import { qbit, btc } from "./chain.js";
 import {
   slhDsaKeygen, slhDsaSign, compressedPub, htlcLeafQbit, p2mrSpk, p2mrSighash, serializeTx,
   P2MR_CONTROL_SINGLE_LEAF, btcSpend,
-} from "../js/index.js";
+} from "../client/index.js";
 
 const BASE = "http://127.0.0.1:8787";
 const api = async (path, { token, method = "GET", body } = {}) => {

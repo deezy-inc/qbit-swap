@@ -1,4 +1,4 @@
-// Minimal BIP-144 segwit transaction codec. Ports swaplib/txcodec.py.
+// Minimal BIP-144 segwit transaction codec. Ports reference/txcodec.py.
 import { concatBytes, u8, leU, compactSize } from "./encoding.js";
 
 class Reader {

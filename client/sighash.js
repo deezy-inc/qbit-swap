@@ -1,4 +1,4 @@
-// P2MR (BIP-341/taproot-style) script-path signature hash. Ports swaplib/sighash.py.
+// P2MR (BIP-341/taproot-style) script-path signature hash. Ports reference/sighash.py.
 // Verified against qbit-core: tag "P2MRSighash", SigVersion::P2MR (ext_flag=1, key_version=0).
 import { sha256 } from "@noble/hashes/sha2.js";
 import { concatBytes, u8, leU, compactSize } from "./encoding.js";

@@ -1,4 +1,4 @@
-// Qbit p2mr primitives + the BTC<->QBT atomic-swap HTLC leaf (Qbit leg). Ports swaplib/p2mr.py.
+// Qbit p2mr primitives + the BTC<->QBT atomic-swap HTLC leaf (Qbit leg). Ports reference/p2mr.py.
 import { sha256 } from "@noble/hashes/sha2.js";
 import { concatBytes, u8, compactSize, pushData, scriptNum, hexToBytes } from "./encoding.js";
 

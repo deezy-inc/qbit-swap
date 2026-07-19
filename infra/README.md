@@ -47,10 +47,11 @@ terraform init && terraform apply
 
 ## Networks
 
-`network` selects the address HRPS the app enforces (`regtest→bcrt/qbrt`, `testnet→tb/tqb`,
-`mainnet→bc/qb`) — a wrong-network address is rejected client-side. Stage on **testnet** before
-mainnet. The coordinator's timelocks still need wall-clock tuning per chain before mainnet
-(see `swaplib/webapp/README.md` › Trust assumptions).
+`network` selects the address hrps — both the ones the app enforces on user addresses **and** the ones
+the coordinator uses for HTLC deposit addresses (`BTC_HRP`/`QBIT_HRP`): `regtest→bcrt/qbrt`,
+`testnet→tb/tqb`, `mainnet→bc/qb`. HTLC **timelocks are wall-clock** (`HTLC_FROM_SECS` 24h /
+`HTLC_TO_SECS` 12h, converted per chain via `BTC_BLOCK_SECS`/`QBIT_BLOCK_SECS`) — `infra/app` derives
+all of these from `network`, so a mainnet apply gets mainnet addresses and real-time-correct timelocks.
 
 ## Secrets
 
@@ -62,7 +63,7 @@ gitignored (`infra/.gitignore`).
 ## Admin dashboard (tailnet-only)
 
 The app box also runs a **read-only monitoring dashboard** in the coordinator process
-(`swaplib/coordinator/admin.js`). It's a live window into the swap store: overview counts, chain
+(`coordinator/admin.js`). It's a live window into the swap store: overview counts, chain
 heights/backends, a filterable table of every swap (state, amounts, funding, party presence,
 watchtower-armed status), the order book, and an SSE activity feed. It reads the live in-memory store
 directly (no DB polling) and exposes **no mutation endpoints**; capability tokens are redacted.
