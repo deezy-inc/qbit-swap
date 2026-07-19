@@ -350,6 +350,7 @@ function stepInvited() {
 // ── live: fund + progress (one screen that morphs) ────────────────────────────
 let liveCard = null;
 function startLive() {
+  flow.client.stop();   // idempotent: safe if we came back from the share screen and re-enter
   liveCard = h("div", { class: "card" }, h("span", { class: "muted" }, "…"));
   render(liveCard);
   rerender = () => { if (flow.client?.view) renderLive(liveCard, flow.client.view); };
@@ -370,6 +371,14 @@ function renderLive(card, v) {
   card.append(h("div", { style: "display:flex;justify-content:space-between;align-items:center" },
     h("h2", { style: "margin:0" }, headline),
     h("span", { class: "badge " + (STATE_CLASS[v.state] || "") }, v.state)));
+
+  // While waiting for the counterparty, show the deal prominently.
+  if (!terminal && !addr) {
+    card.append(h("div", { style: "font-size:19px;font-weight:640;letter-spacing:-.01em;margin-top:14px;line-height:1.4" },
+      t("sendingReceiving", { outAmt: `${sats(coinSats(send))} ${send}`, inAmt: `${sats(coinSats(recv))} ${recv}` }),
+      " ",
+      h("span", { class: "note", style: "font-weight:400;font-size:13px" }, t("minusFees"))));
+  }
 
   if (v.securityError) { liveGuard = { risky: false }; card.append(h("p", { class: "note", style: "color:var(--bad);font-weight:600;margin-top:12px" }, t("securityErr"))); return; }
 
@@ -400,6 +409,11 @@ function renderLive(card, v) {
   }
   if (!terminal && flow.mode === "create" && flow.bobLink) {
     card.append(h("div", { class: "btns", style: "margin-top:8px" }, copyButton("copyInvite", "inviteCopied", () => flow.bobLink)));
+  }
+  // While waiting for the counterparty, let the creator go back to the share screen.
+  if (!terminal && !addr && flow.mode === "create") {
+    card.append(h("div", { style: "margin-top:14px" },
+      h("a", { href: "#", style: "color:var(--mut)", onclick: (e) => { e.preventDefault(); stepShare(); } }, t("back"))));
   }
 
   if (!terminal && addr) {

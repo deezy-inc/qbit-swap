@@ -51,6 +51,8 @@ const en = {
   // live
   swapComplete: "Swap complete 🎉", swapRefunded: "Swap refunded",
   waitingCounterparty: "Waiting for your counterparty…",
+  sendingReceiving: "Sending {outAmt}, Receiving {inAmt}",
+  minusFees: "(minus network fees)",
   coinLocked: "Your {coin} is locked", sendToLock: "Send {coin} to lock your side",
   cpOnline: "Your counterparty is online",
   cpOffline: "Your counterparty is offline — they should keep their tab open",
@@ -134,6 +136,8 @@ const zh = {
   invitedNote: "兑换将原子性结算：要么双方都完成，要么双方都退款。两条链上的确认最长可能需要约一小时——请保持此标签页开启直到完成，并保存您的备份文件，以便关闭后仍能继续或退款。",
   swapComplete: "兑换完成 🎉", swapRefunded: "已退款",
   waitingCounterparty: "正在等待您的对手方…",
+  sendingReceiving: "发送 {outAmt}，接收 {inAmt}",
+  minusFees: "（扣除网络手续费）",
   coinLocked: "您的 {coin} 已锁定", sendToLock: "发送 {coin} 以锁定您这一方",
   cpOnline: "您的对手方在线",
   cpOffline: "您的对手方离线——他们应保持标签页开启",
