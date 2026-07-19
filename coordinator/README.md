@@ -1,3 +1,5 @@
+**English** · [简体中文](README.zh-CN.md)
+
 # qbit-swap coordinator
 
 A **keyless, non-custodial** service that orchestrates BTC↔QBT atomic swaps. It never holds keys,

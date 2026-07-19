@@ -1,3 +1,5 @@
+**English** · [简体中文](README.zh-CN.md)
+
 # qbit-swap
 
 [![CI](https://github.com/deezy-inc/qbit-swap/actions/workflows/ci.yml/badge.svg)](https://github.com/deezy-inc/qbit-swap/actions/workflows/ci.yml)

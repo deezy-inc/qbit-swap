@@ -1,3 +1,5 @@
+**English** · [简体中文](README.zh-CN.md)
+
 # WASM SLH-DSA signer
 
 The exotic part of the browser swap client — Qbit's post-quantum signing — compiled to WebAssembly.

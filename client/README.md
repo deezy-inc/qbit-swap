@@ -1,3 +1,5 @@
+**English** · [简体中文](README.zh-CN.md)
+
 # qbit-swap client library (JS)
 
 The environment-agnostic core of the atomic-swap client — the same code the browser web app and any

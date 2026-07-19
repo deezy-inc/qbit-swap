@@ -1,3 +1,5 @@
+**English** · [简体中文](README.zh-CN.md)
+
 # qbit-swap web app
 
 A **wallet-agnostic, non-custodial** browser app for BTC⇄QBT atomic swaps. The browser generates

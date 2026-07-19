@@ -1,0 +1,117 @@
+[English](README.md) · **简体中文**
+
+# qbit-swap coordinator
+
+一个**无密钥、非托管**的服务，用于编排 BTC↔QBT 原子兑换。它从不持有密钥、
+资金或原像（直到原像在链上公开为止）。它派生出两个 HTLC 地址，监视两条
+链，在满足抗重组的确认数（`getconfirmationtarget`）后才放行领取，广播
+由对手方签名的交易，并公开已揭示的原像。浏览器 web 应用和无界面的做市
+**bot** 都通过同一套 HTTP API 驱动它。
+
+## Pieces
+- `chain.js` — 面向两个节点的无密钥链适配器（区块高度、`getconfirmationtarget`、`scantxoutset`
+  注资监视、确认数、`testmempoolaccept`/`sendrawtransaction`）。dev 传输通过 ssh 调用
+  回归测试网的命令行工具；生产适配器将 `rpc()` 替换为直接的 JSON-RPC。
+- `swap.js` — swap 存储 + Tier-Nolan 状态机
+  （`CREATED→READY→BTC_FUNDED→QBT_FUNDED→MATURING→CLAIMABLE→CLAIMED→COMPLETE`，另加 `REFUNDED`/`ABORTED`）。
+- `server.js` — HTTP/JSON API + 链监视循环；通过每个对手方的能力令牌进行鉴权。
+- `admin.js` — **只读监控仪表盘**（见下文）。
+- `demo.js` — 两个无界面 bot 通过 API 走完整个 swap，使用 `../js` 在客户端签名。
+
+## Admin dashboard (`admin.js`)
+一个独立的进程内 HTTP 服务器（`startAdmin(port)`，默认 `8790`），为运营者提供存储的实时
+视图 —— 概览计数、链高度/后端、一张可筛选的全部 swap 表格（状态、
+金额、注资、对手方是否到场、看守塔是否已装填状态）、订单簿，以及一个 SSE 活动流。
+它直接读取内存中的实时存储（无需轮询数据库；由全局 `subscribeAll` 驱动活动流），
+**不暴露任何变更端点**，并**隐去能力令牌**。由 `ADMIN_TOKEN` 把关
+（`?token=` 或 `X-Admin-Token`；未设置时会生成一个随机值并记录到日志）。`serve.js`/`trial.js` 会自动启动
+它，除非 `ADMIN=off`。它应当通过私有网络访问（例如 tailnet），
+切勿公开暴露 —— 用 `ADMIN_BIND` 绑定，并使其远离任何公开的反向代理。
+- `GET /` dashboard · `GET /api/overview` · `GET /api/swaps[?state=]` · `GET /api/swaps/:id` ·
+  `GET /api/offers` · `GET /stream` (SSE)
+
+## API (auth: `X-Swap-Token`, header or `?token=`)
+- `POST /swaps` → `{ id, tokens: { alice, bob } }`（Alice 把 Bob 的令牌作为他的链接分享给他）
+- `POST /swaps/:id/party` — 提交 `{ qbitPub, btcPub, btcDest, qbitDest, H? }`
+- `GET  /swaps/:id` — 对手方视图：两条腿的 HTLC 地址、注资（+`spent`）、确认数、链
+  `heights`、`state`、每条腿的退款可用性，以及 `preimage`（仅在链上公开后才有）
+- `GET  /swaps/:id/events` — **Server-Sent Events**：在每次状态变化时推送相同的视图（
+  web 应用和 bot 订阅它而非轮询）
+- `POST /swaps/:id/broadcast` — 提交 `{ leg, kind, tx }`（`kind`：`claim` | `refund`）以广播
+- `POST /swaps/:id/finish` — **watchtower**：提交一份预先签名的 `{ claim: { leg, needsPreimage, tiers:[{feerate,tx}] }, refund: { leg, tx } }`，让协调器在你离线时也能完成该 swap
+
+监视器会在某条已注资、仍未花费的腿的时间锁到期后公开 `refund.{qbit,btc}.available`，
+并在某条腿的领取/退款上链（通过 API 或直接上链）时将其标记为 `spent` —— 因此即便一个 swap 在
+带外解决，它仍会到达终态。
+
+## Watchtower (`swap.js` `driveWatchtower` + `fees.js`)
+一旦两条腿都完成注资，每个对手方便预先签名并上传（`/finish`）一份**费用阶梯领取**（
+若干费率档位）和一份**退款**。随后协调器会驱动 swap 走向完成或退款，即使
+两个标签页都关闭：它会在腿成熟时广播发起方的领取（揭示原像），
+将该原像拼接进参与方预先签名的领取中并广播，或在中止时于对手方的时间锁到期后广播其
+退款。它使用缓存的 mempool.space 费率（`fees.js`、`FEES_TTL_MS`）来挑选/升级阶梯档位。
+**非托管：**每一笔存储的交易都只支付给其所有者的地址，且协调器不持有任何密钥 —— 它只能协助，绝不能改向。
+全 RBF 是网络的默认设置，因此各档位无需 RBF 信号。由 `../webapp/test/watchtower.e2e.mjs` 证明（
+双方装填、关闭各自的标签页、协调器完成收尾）。
+
+## Order book API (optional — `offers.js`)
+在 swap 引擎之上的一层做市方/吃单方（web 应用用一个开关将其挡在后面；见其 README）。
+- `POST /offers` — 做市方发布一手 `{ giveCoin, giveSats, wantCoin, wantSats }` → `{ id, makerToken }`
+- `GET  /offers` — 公开订单簿：`{ asks, bids }`（QBT 以 BTC 计价；ask = 卖出 QBT 换 BTC），最优价在前
+- `POST /offers/:id/take` — 从挂单实例化一个 swap（吃单方 = 发起方）→ `{ swapId, takerToken, direction, terms }`
+- `GET  /offers/:id?makerToken=…` — 做市方视图，含该笔成交（其 swap 令牌），以便其履约
+- `POST /offers/:id/cancel`（做市方令牌）— 撤回一个未成交的挂单
+
+## Backends (env, per chain — see `chain.js`)
+每条链通过 `<CHAIN>_BACKEND` 选择一个后端（回退到 `COORD_CHAIN`，再回退到 `dev`）：
+- **`dev`** — 调用某个节点的命令行工具。设置 `<CHAIN>_CLI`，若要远程运行还需设置 `<CHAIN>_SSH_HOST`
+  （留空 = 本地）。这是回归测试网实验室的传输方式；`findOutput` 使用 `scantxoutset`（仅在
+  极小的回归测试网 UTXO 集上才可行）。
+- **`rpc`** — 基于 HTTP 的 JSON-RPC；设置 `<CHAIN>_RPC_URL`（例如 `http://user:pass@host:port`）。注资
+  监视方法按链通过 `<CHAIN>_WATCH` 设定（默认：BTC `wallet`，QBT `scan`）：
+  - `wallet`（Bitcoin 默认）— 一个**只向前推进的只读钱包**（`importdescriptors timestamp:"now"`
+    + `listunspent`），从不使用 `scantxoutset`，因此可在**修剪**的 Bitcoin 节点上工作（`getTx` 通过
+    钱包读取，无需 `txindex`）。
+  - `scan`（Qbit 默认）— `scantxoutset`，在小型 UTXO 集上很廉价（Qbit 的年轻链），并
+    避免依赖钱包对 `p2mr`（witness-v2）描述符的跟踪。反正一个完整（未修剪）的 qbitd 也很
+    廉价，因为整条链都很小。
+  wallet 路径会运行一个后台作业，轮换钱包以丢弃已结清 swap 的描述符，使其
+  不会膨胀
+  —— **由数量驱动，而非由时间驱动**：只有在 `WATCH_PRUNE_THRESHOLD`（默认 500）个陈旧
+  描述符摊销之后才轮换一次（几百个是无害的），每隔 `WATCH_CLEANUP_MS`（默认 6h）检查一次。
+  一个描述符在其 swap 仍非终态期间（**整个恢复/退款窗口**，可能很长）会一直保留，
+  外加结清后一段 `WATCH_SETTLE_GRACE_MS` 的宽限期（默认 24h），因此当对手方可能仍在
+  退款时它绝不会被丢弃。（即便真被丢弃，资金也绝不会有风险 —— 该钱包仅用于注资*检测*；
+  各方用自己的密钥退款。）`WATCH_WALLET` 设定钱包名称。
+- **`esplora`** — 用于 **BTC 腿**的 mempool.space / 自托管 electrs REST（无需 Bitcoin 节点）；
+  设置 `ESPLORA_URL`（默认 `https://mempool.space/api`）。带索引的 scripthash 查询 + 内置的
+  限流处理（`ESPLORA_MIN_INTERVAL_MS`、`ESPLORA_MAX_RETRIES`）。Qbit 没有公开后端，因此
+  QBT 腿必须针对你自己的 `qbitd` 使用 `dev`/`rpc`。
+
+其他可调项：`COORD_DB=/path/state.json`（JSON 持久化；默认在内存中）· `RATE_MAX=120`
+（每 IP 每分钟写入数）· `DEV_CONFS_CAP`（在没有算力的回归测试网上封顶抗重组确认门槛）。
+
+### HTLC addresses + timelocks (set these for the deploy network)
+- `BTC_HRP` / `QBIT_HRP` — 协调器发放的 HTLC **存款地址**的 hrp。必须与
+  网络匹配：`bcrt`/`qbrt`（回归测试网，默认）、`tb`/`tqb`（测试网）、`bc`/`qb`（主网）。hrp 错误 =
+  一个用户钱包无法支付的地址。
+- **时间锁是挂钟时间**，而非原始区块数。`HTLC_FROM_SECS`（发起方的腿，较长；默认 24h）
+  和 `HTLC_TO_SECS`（参与方的腿，较短；默认 12h）各自通过 `BTC_BLOCK_SECS`（600）/ `QBIT_BLOCK_SECS`（60）
+  在各自的链上换算为一个区块数。这使得 Tier-Nolan 的排序（发起方的腿在真实时间上比参与方的腿更长久）
+  在**两个**方向上都保持正确，尽管 BTC 约 10 分钟而 QBT 约 60 秒出块。`HTLC_FROM_SECS` 必须大于 `HTLC_TO_SECS`（强制约束）。
+  对于快速的回归测试网实验室，将出块时间设为 `1`，窗口设为 `20`/`40`（见 `deploy/lab.env`）。
+
+## Run the demos
+需要两个回归测试网节点处于运行状态（见 `../wasm`/`../js`）。然后：
+```sh
+DEV_CONFS_CAP=2 node demo.js         # happy path: full swap -> COMPLETE
+DEV_CONFS_CAP=2 node refund_demo.js  # abort path: both parties refund -> REFUNDED, no preimage
+```
+`demo.js` 创建一个 swap，两个 bot 都加入，为两个 HTLC 注资，让 QBT 腿成熟，Alice 领取 QBT
+（WASM SLH-DSA，揭示原像），Bob 读取它并领取 BTC。`refund_demo.js` 为两条腿注资
+然后停滞；一旦时间锁到期，Bob 退款其 QBT，Alice 退款其 BTC —— 证明了
+非托管的中止保证（无人会吃亏）。
+
+## Not yet (next)
+- 构建在 `../js` 之上的浏览器 web 应用（文件备份 + 用 passkey-PRF/密码加密的 IndexedDB 密钥
+  管理）；抗重组的高度跟踪已经在为监视器供数。
