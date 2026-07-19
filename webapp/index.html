@@ -175,6 +175,22 @@
     box-shadow:0 0 0 4px var(--accent-soft); }
   .feature p { font-size:13.5px; line-height:1.55; color:var(--ink-2); margin:8px 0 0; max-width:44ch; }
 
+  /* how-it-works numbered timeline */
+  .steps-section { border-top:1px solid var(--line); padding-top:clamp(38px,6vw,58px); margin-top:clamp(40px,6vw,64px); }
+  .steps-section h2 { text-align:center; font-size:clamp(1.35rem,2.6vw,1.75rem); letter-spacing:-.02em;
+    font-weight:640; color:var(--ink); margin:0 0 clamp(30px,4vw,44px); }
+  .steps { max-width:600px; margin:0 auto; }
+  .step { position:relative; display:flex; gap:18px; padding-bottom:26px; }
+  .step:last-child { padding-bottom:0; }
+  .step:not(:last-child)::before { content:""; position:absolute; left:18px; top:38px; bottom:2px; width:2px;
+    background:linear-gradient(var(--accent-line), var(--line)); }
+  .step-num { width:38px; height:38px; border-radius:50%; flex:none; display:grid; place-items:center;
+    font-weight:700; font-size:15px; color:var(--accent); background:var(--surface); border:1px solid var(--accent-line);
+    box-shadow:0 0 0 4px var(--bg); position:relative; z-index:1; }
+  .step-body { padding-top:6px; }
+  .step-body b { display:block; font-size:16px; font-weight:640; letter-spacing:-.01em; color:var(--ink); }
+  .step-body p { font-size:13.5px; line-height:1.55; color:var(--ink-2); margin:3px 0 0; }
+
   @media (prefers-reduced-motion: reduce) {
     * { animation-duration:.001ms !important; animation-iteration-count:1 !important; transition-duration:.001ms !important; }
     .card, .hero > *, .hero-emblem .orbit { animation:none; }

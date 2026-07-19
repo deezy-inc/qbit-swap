@@ -147,8 +147,18 @@ function stepWelcome() {
     h("section", { class: "features" },
       h("h2", {}, t("featTitle")),
       h("div", { class: "feature-grid" }, feature(1), feature(2), feature(3), feature(4), feature(5), feature(6))),
+    h("section", { class: "steps-section" },
+      h("h2", {}, t("stepsTitle")),
+      h("div", { class: "steps" },
+        stepRow(1, h("p", {}, t("step1dPre"),
+          h("a", { href: "https://discord.gg/xqC7MAk95Q", target: "_blank", rel: "noopener" }, t("confirmDiscordLink")),
+          t("step1dPost"))),
+        stepRow(2), stepRow(3), stepRow(4), stepRow(5), stepRow(6), stepRow(7))),
   ));
 }
+const stepRow = (n, detail) => h("div", { class: "step" },
+  h("div", { class: "step-num" }, n),
+  h("div", { class: "step-body" }, h("b", {}, t("step" + n + "t")), detail || h("p", {}, t("step" + n + "d"))));
 
 // Direction chooser + resume/recover.
 async function stepChoose(resumable) {
