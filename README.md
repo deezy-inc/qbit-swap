@@ -21,7 +21,7 @@ assumptions.)
 | `swaplib/coordinator/` | **Keyless coordinator** — Tier-Nolan state machine, reorg-safe confirmation gating, refund side-paths, SSE live feed, presence, pluggable chain backends. | ✅ |
 | `swaplib/webapp/` | **Web app** — a wallet-agnostic, one-decision-per-screen wizard (EN / 简体中文). Ephemeral keys, in-page signing, plaintext backup file. | ✅ |
 | `swaplib/*.py` | Python reference implementation + regtest validation scripts. | ✅ |
-| `node-patches/` | Upstream PR for `qbitd`: partially-sign non-template `p2mr` leaves (lets a Qbit wallet sign HTLCs). | ✅ |
+| `infra/` | Terraform for the deployment (app + keyless coordinator behind a Cloudflare Tunnel; dedicated keyless qbitd) + a monitoring dashboard. | ✅ |
 
 Market-maker bots live in a **separate private repo** (they consume `@qbit-swap/client` + the
 coordinator API).

@@ -86,6 +86,23 @@ export function sweepPresence() {
 }
 
 const MIN_SATS = { btc: Number(process.env.MIN_BTC_SATS || 50000), qbit: Number(process.env.MIN_QBT_SATS || 200000) };   // above the largest claim/refund fee + dust
+
+// Network hrp for the HTLC deposit addresses the coordinator hands out. MUST match the deploy network
+// (regtest bcrt/qbrt · testnet tb/tqb · mainnet bc/qb) or users get an unspendable address.
+const HRP = { btc: process.env.BTC_HRP || "bcrt", qbit: process.env.QBIT_HRP || "qbrt" };
+
+// ── HTLC timelocks, in WALL-CLOCK time (not raw blocks) ───────────────────────────────────────
+// Tier-Nolan safety: the initiator's leg (fromLeg) must stay refundable LONGER — in real time — than
+// the participant's leg (toLeg), so the participant is forced to reveal the preimage (claiming their
+// leg) before the initiator can refund, and the initiator still has time to claim after the reveal.
+// BTC (~10 min) and QBT (~60 s) have very different block times, so a fixed BLOCK count would invert
+// this ordering in one direction. We instead pick wall-clock windows and convert each to that chain's
+// block count via its block time. For regtest the lab sets tiny values so tests stay fast.
+const BLOCK_SECS = { btc: Number(process.env.BTC_BLOCK_SECS || 600), qbit: Number(process.env.QBIT_BLOCK_SECS || 60) };
+const HTLC_TO_SECS = Number(process.env.HTLC_TO_SECS || 12 * 3600);     // participant's (shorter) window
+const HTLC_FROM_SECS = Number(process.env.HTLC_FROM_SECS || 24 * 3600); // initiator's (longer) window
+if (!(HTLC_FROM_SECS > HTLC_TO_SECS)) throw new Error("HTLC_FROM_SECS must exceed HTLC_TO_SECS — the initiator's leg has to outlast the participant's");
+const locktimeBlocks = (leg, secs) => Math.max(1, Math.ceil(secs / BLOCK_SECS[leg]));
 export function createSwap({ btcSats, qbtSats, securityLevel = "high", direction = "btc2qbt" }) {
   if (direction !== "btc2qbt" && direction !== "qbt2btc") throw new Error("bad direction");
   // Reject dust-level swaps: the amount must comfortably exceed claim/refund fees (incl. the top
@@ -133,11 +150,12 @@ async function deriveHtlcs(s) {
   const [qh, bh] = [await qbit.height(), await btc.height()];
   const { fromLeg, toLeg } = s.roles;
   const A = s.party.alice, B = s.party.bob;   // A = initiator, B = participant
-  // fromLeg (initiator funds) gets the LONGER timelock; toLeg (participant funds) the SHORTER one.
-  const SHORT = 20, LONG = 40;
+  // fromLeg (initiator funds) gets the LONGER wall-clock window; toLeg (participant funds) the SHORTER
+  // one. Each window is converted to a block count on its OWN chain, so the real-time ordering holds
+  // regardless of which coin is on which leg.
   const lock = { qbit: qh, btc: bh };
-  lock[fromLeg] += (fromLeg === "qbit" ? LONG : LONG);     // longer
-  lock[toLeg] += (toLeg === "qbit" ? SHORT : SHORT);       // shorter
+  lock[fromLeg] += locktimeBlocks(fromLeg, HTLC_FROM_SECS);
+  lock[toLeg] += locktimeBlocks(toLeg, HTLC_TO_SECS);
   s.locktimes = lock;
 
   // Per leg: claim party + refund party. On fromLeg, participant claims (with public secret) &
@@ -149,8 +167,8 @@ async function deriveHtlcs(s) {
   const fromScript = build(fromLeg, "bob", "alice");    // fromLeg: participant claims, initiator refunds
   const toScript = build(toLeg, "alice", "bob");        // toLeg:   initiator claims, participant refunds
   const pack = (leg, script) => leg === "qbit"
-    ? { leaf: hex(script), spk: hex(p2mrSpk(script)), address: p2mrAddress(script, "qbrt") }
-    : { witnessScript: hex(script), spk: hex(p2wshSpk(script)), address: p2wshAddr(script, "bcrt") };
+    ? { leaf: hex(script), spk: hex(p2mrSpk(script)), address: p2mrAddress(script, HRP.qbit) }
+    : { witnessScript: hex(script), spk: hex(p2wshSpk(script)), address: p2wshAddr(script, HRP.btc) };
   s.htlc = { [fromLeg]: pack(fromLeg, fromScript), [toLeg]: pack(toLeg, toScript) };
 
   // Reorg-safe gate on the leg the initiator claims (toLeg). Qbit has the native engine; for a BTC

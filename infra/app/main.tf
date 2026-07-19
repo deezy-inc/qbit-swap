@@ -2,6 +2,16 @@ data "aws_ssm_parameter" "ubuntu" {
   name = "/aws/service/canonical/ubuntu/server/24.04/stable/current/amd64/hvm/ebs-gp3/ami-id"
 }
 
+# Network hrps for the HTLC deposit addresses the coordinator generates — must match `network`.
+locals {
+  hrps = {
+    regtest = { btc = "bcrt", qbit = "qbrt" }
+    testnet = { btc = "tb", qbit = "tqb" }
+    mainnet = { btc = "bc", qbit = "qb" }
+  }
+  hrp = local.hrps[var.network]
+}
+
 resource "aws_key_pair" "app" {
   key_name_prefix = "qbit-swap-app-"
   public_key      = var.ssh_public_key
@@ -59,6 +69,12 @@ resource "aws_instance" "app" {
     orderbook          = var.orderbook ? "1" : ""
     admin_token        = var.admin_token
     admin_port         = var.admin_port
+    btc_hrp            = local.hrp.btc
+    qbit_hrp           = local.hrp.qbit
+    htlc_from_secs     = var.htlc_from_secs
+    htlc_to_secs       = var.htlc_to_secs
+    btc_block_secs     = var.btc_block_secs
+    qbit_block_secs    = var.qbit_block_secs
   })
   # Re-render + replace the instance when the wiring changes.
   user_data_replace_on_change = true

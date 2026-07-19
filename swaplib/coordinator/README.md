@@ -90,6 +90,17 @@ Each chain picks a backend via `<CHAIN>_BACKEND` (falls back to `COORD_CHAIN`, t
 Other knobs: `COORD_DB=/path/state.json` (JSON persistence; default in-memory) · `RATE_MAX=120`
 (per-IP writes/min) · `DEV_CONFS_CAP` (cap the reorg-safe conf gate on hashrate-less regtest).
 
+### HTLC addresses + timelocks (set these for the deploy network)
+- `BTC_HRP` / `QBIT_HRP` — hrp for the HTLC **deposit addresses** the coordinator hands out. Must match
+  the network: `bcrt`/`qbrt` (regtest, default), `tb`/`tqb` (testnet), `bc`/`qb` (mainnet). Wrong hrp =
+  an address the user's wallet can't pay.
+- **Timelocks are wall-clock**, not raw blocks. `HTLC_FROM_SECS` (initiator's leg, longer; default 24h)
+  and `HTLC_TO_SECS` (participant's leg, shorter; default 12h) are each converted to a block count on
+  their own chain via `BTC_BLOCK_SECS` (600) / `QBIT_BLOCK_SECS` (60). This keeps the Tier-Nolan
+  ordering (initiator's leg outlasts the participant's, in real time) correct in **both** directions
+  despite BTC's ~10 min vs QBT's ~60 s blocks. `HTLC_FROM_SECS` must exceed `HTLC_TO_SECS` (enforced).
+  For a fast regtest lab, set the block times to `1` and the windows to `20`/`40` (see `deploy/lab.env`).
+
 ## Run the demos
 Needs the two regtest nodes up (see `../wasm`/`../js`). Then:
 ```sh

@@ -142,3 +142,27 @@ variable "admin_port" {
   type    = number
   default = 8790
 }
+
+# ── HTLC timelocks (wall-clock) + chain block times ──────────────────────────────────────────
+# The initiator's leg stays refundable HTLC_FROM_SECS; the participant's HTLC_TO_SECS (must be less).
+# The coordinator converts each to a block count via the chain's block time, so the real-time ordering
+# holds regardless of direction. Defaults are the code's mainnet values.
+variable "htlc_from_secs" {
+  type    = number
+  default = 86400 # 24h — initiator's (longer) window
+}
+
+variable "htlc_to_secs" {
+  type    = number
+  default = 43200 # 12h — participant's (shorter) window
+}
+
+variable "btc_block_secs" {
+  type    = number
+  default = 600
+}
+
+variable "qbit_block_secs" {
+  type    = number
+  default = 60
+}
