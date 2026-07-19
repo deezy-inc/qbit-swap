@@ -39,7 +39,7 @@ const en = {
   feat6: "Any wallet", feat6d: "Paste a receiving address and send from whatever wallet you like.",
   stepsTitle: "How a swap works",
   step1t: "Find someone to trade with", step1dPre: "Meet a counterparty in the ", step1dPost: " — or anywhere you like.",
-  step2t: "Agree on price and amount", step2d: "Settle the terms directly with them before you start.",
+  step2t: "Agree on price and amount", step2d: "Agree on the terms directly with them before you start.",
   step3t: "Create the swap here", step3d: "Pick a direction and enter the amounts.",
   step4t: "Share the link", step4d: "Send your counterparty the private link to take the other side.",
   step5t: "Send your coins", step5d: "Each side funds its leg into the on-chain contracts.",
