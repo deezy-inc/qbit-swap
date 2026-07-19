@@ -5,7 +5,7 @@ const en = {
   back: "← Back", continue: "Continue",
   // landing
   swapWhichWay: "Which way do you want to swap?",
-  nonCustodial: "Non-custodial · your keys are generated here and never leave your browser.",
+  nonCustodial: "This app coordinates a trustless atomic swap between you and somebody else.",
   haveBtc: "Buy QBT", haveBtcSub: "You send Bitcoin, receive Qbit",
   haveQbt: "Sell QBT", haveQbtSub: "You send Qbit, receive Bitcoin",
   recoverTitle: "Recover or resume a swap",
@@ -94,7 +94,7 @@ const zh = {
   tagline: "非托管原子兑换 BTC ⇄ QBT · 密钥保存在您的浏览器中",
   back: "← 返回", continue: "继续",
   swapWhichWay: "您想如何兑换？",
-  nonCustodial: "非托管 · 您的密钥在本地生成，绝不离开您的浏览器。",
+  nonCustodial: "此应用在您与另一方之间协调一次无需信任的原子兑换。",
   haveBtc: "买入 QBT", haveBtcSub: "您发送比特币，接收 Qbit",
   haveQbt: "卖出 QBT", haveQbtSub: "您发送 Qbit，接收比特币",
   recoverTitle: "恢复或继续兑换",
