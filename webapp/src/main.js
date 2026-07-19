@@ -572,7 +572,6 @@ window.addEventListener("drop", async (e) => {
 
 // ── language switcher (header) ────────────────────────────────────────────────
 function renderChrome() {
-  const tag = document.getElementById("tagline"); if (tag) tag.textContent = t("tagline");
   const info = document.getElementById("info-link"); if (info) info.textContent = t("infoTab");
   const el = document.getElementById("lang"); if (!el) return;
   while (el.firstChild) el.removeChild(el.firstChild);
