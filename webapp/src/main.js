@@ -226,6 +226,8 @@ function stepConfirm() {
     title: t("beforeBegin"), subtitle: t("confirmSub"),
     body: [
       h("p", { class: "note" }, t("confirmP1", { from: d.from, to: d.to })),
+      h("p", { style: "font-size:19px;font-weight:660;letter-spacing:-.015em;line-height:1.3;color:var(--ink);margin:14px 0 4px" }, t("confirmKey")),
+      h("p", { class: "note", style: "margin-top:2px" }, t("confirmP1b")),
       h("p", { class: "note" }, t("confirmP2")),
       h("p", { class: "note" }, t("confirmP3")),
     ],
