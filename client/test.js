@@ -15,7 +15,7 @@ ck("p2mr leaf root matches node golden", hex(singleLeafRoot(singleKeyLeaf(PUB)))
 ck("bech32m address matches node", p2mrAddress(singleKeyLeaf(PUB), "qbrt") === "qbrt1zx6pk4xcl0x80u0yql4hjcqsw26xr8rnxxf05868usa49uq8cdwws9a930l");
 
 // 3) P2MR sighash vs golden witness vector (single_key_default_sighash)
-const v = JSON.parse(readFileSync(new URL("../vectors.json", import.meta.url)))[0];
+const v = JSON.parse(readFileSync(new URL("../reference/vectors.json", import.meta.url)))[0];
 const t = parseTx(v.spendTx);
 const sh = p2mrSighash({
   version: t.version, locktime: t.locktime,
