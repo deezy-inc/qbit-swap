@@ -38,9 +38,9 @@
   /* header */
   header { display:flex; align-items:center; gap:11px; padding:16px 22px; border-bottom:1px solid var(--line);
     background:linear-gradient(var(--surface),var(--bg)); position:sticky; top:0; z-index:20; backdrop-filter:saturate(1.2); }
-  .mark { width:27px; height:27px; flex:none; display:grid; place-items:center; color:var(--accent); }
+  .mark { width:27px; height:27px; flex:none; display:grid; place-items:center; color:var(--accent); cursor:pointer; }
   .mark svg { width:27px; height:27px; display:block; }
-  header h1 { font-size:15px; font-weight:650; margin:0; letter-spacing:-.01em; }
+  header h1 { font-size:15px; font-weight:650; margin:0; letter-spacing:-.01em; cursor:pointer; }
   header .tag { color:var(--mut); font-size:12.5px; margin-left:2px; }
   @media (max-width:560px){ header .tag { display:none; } }
   .gh { margin-left:auto; display:inline-grid; place-items:center; width:32px; height:32px; border-radius:8px; color:var(--mut);

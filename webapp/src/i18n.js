@@ -11,6 +11,8 @@ const en = {
   recoverTitle: "Recover or resume a swap",
   recoverBody: "Already have a swap in progress? Reopen it on this device, or upload the backup file you saved.",
   resumeBtn: "Resume {from} → {to} · {id}",
+  resumeBuy: "Buy {qbt} QBT for {btc} BTC", resumeSell: "Sell {qbt} QBT for {btc} BTC",
+  errAlreadyJoined: "Someone else has already joined this swap. If you think this is an error, upload your backup file on the home page to resume your swap.",
   uploadInstead: "Upload a backup file instead", uploadBackup: "Upload backup file",
   // confirm
   beforeBegin: "Before you begin",
@@ -102,6 +104,8 @@ const zh = {
   recoverTitle: "恢复或继续兑换",
   recoverBody: "已有进行中的兑换？在此设备上重新打开，或上传您保存的备份文件。",
   resumeBtn: "继续 {from} → {to} · {id}",
+  resumeBuy: "以 {btc} BTC 买入 {qbt} QBT", resumeSell: "卖出 {qbt} QBT 换 {btc} BTC",
+  errAlreadyJoined: "此兑换已被他人接受。如果您认为这是误报，请在主页上传您的备份文件以继续您的兑换。",
   uploadInstead: "改为上传备份文件", uploadBackup: "上传备份文件",
   beforeBegin: "开始之前",
   confirmSub: "这是点对点原子兑换——您直接与对手方交易，而非与我们。",

@@ -24,9 +24,20 @@ export class SwapClient {
     this.acted = new Set();
   }
 
+  // Retries transient failures (network drop, coordinator restart/blip, 5xx/429) so an in-flight
+  // create/join/submit isn't lost to a momentary outage. A definitive 4xx (business error) is thrown
+  // immediately — it won't succeed on retry.
   async #api(path, { token, method = "GET", body } = {}) {
-    const r = await fetch(this.base + path, { method, headers: { "content-type": "application/json", ...(token ? { "x-swap-token": token } : {}) }, body: body ? JSON.stringify(body) : undefined });
-    const j = await r.json(); if (!r.ok) throw new Error(j.error || r.status); return j;
+    const headers = { "content-type": "application/json", ...(token ? { "x-swap-token": token } : {}) };
+    for (let attempt = 0; ; attempt++) {
+      let r;
+      try { r = await fetch(this.base + path, { method, headers, body: body ? JSON.stringify(body) : undefined }); }
+      catch (e) { if (attempt >= 4) throw e; await new Promise((s) => setTimeout(s, 500 * (attempt + 1))); continue; }
+      if (r.status >= 500 || r.status === 429) { if (attempt >= 4) throw new Error(`coordinator ${r.status}`); await new Promise((s) => setTimeout(s, 500 * (attempt + 1))); continue; }
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.error || r.status);
+      return j;
+    }
   }
 
   // ── identity / persistence ───────────────────────────────────────────────────
@@ -41,6 +52,7 @@ export class SwapClient {
       btcDest: this.btcDest, qbitDest: this.qbitDest,
       qbitPk: hex(this.qbit.pk), qbitSk: hex(this.qbit.sk), btcPriv: hex(this.btcPriv),
       secret: this.secret ? hex(this.secret) : null, H: this.H ? hex(this.H) : null,
+      btcSats: this.terms?.btcSats ?? null, qbtSats: this.terms?.qbtSats ?? null,
       recovery: this.recovery || null,   // pre-signed watchtower ladder (claim tiers + refund), for offline recovery
     };
   }
@@ -49,6 +61,7 @@ export class SwapClient {
     this.btcDest = p.btcDest; this.qbitDest = p.qbitDest;
     this.qbit = { pk: bin(p.qbitPk), sk: bin(p.qbitSk) }; this.btcPriv = bin(p.btcPriv);
     this.secret = p.secret ? bin(p.secret) : null; this.H = p.H ? bin(p.H) : null;
+    this.terms = p.btcSats != null ? { btcSats: p.btcSats, qbtSats: p.qbtSats } : null;
     this.recovery = p.recovery || null;
     return this;
   }
@@ -56,6 +69,7 @@ export class SwapClient {
   // ── create (initiator) / join (participant) ──────────────────────────────────
   async create({ direction = "btc2qbt", btcSats, qbtSats, securityLevel = "high", btcDest, qbitDest }) {
     this.role = "alice"; this.direction = direction; this.btcDest = btcDest; this.qbitDest = qbitDest;
+    this.terms = { btcSats, qbtSats };
     await this.#freshKeys(true);
     const { id, tokens } = await this.#api("/swaps", { method: "POST", body: { direction, btcSats, qbtSats, securityLevel } });
     this.id = id; this.token = tokens.alice;
@@ -66,14 +80,15 @@ export class SwapClient {
     this.role = "bob"; this.id = id; this.token = token; this.btcDest = btcDest; this.qbitDest = qbitDest;
     await this.#freshKeys(false);
     const v = await this.#submit();
-    this.direction = v.direction;
+    this.direction = v.direction; this.terms = { btcSats: v.terms?.btcSats, qbtSats: v.terms?.qbtSats };
     return { id, direction: v.direction };
   }
   // Enter an already-created swap (e.g. one instantiated by taking an order-book offer) in a given role.
   async enter({ id, token, direction, role, btcDest, qbitDest }) {
     this.role = role; this.direction = direction; this.id = id; this.token = token; this.btcDest = btcDest; this.qbitDest = qbitDest;
     await this.#freshKeys(role === "alice");
-    await this.#submit();
+    const v = await this.#submit();
+    this.terms = { btcSats: v.terms?.btcSats, qbtSats: v.terms?.qbtSats };
     return { id };
   }
   #submit() {

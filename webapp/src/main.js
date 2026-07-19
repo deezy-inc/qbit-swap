@@ -113,7 +113,13 @@ const coordPost = async (p, body) => { const r = await fetch(coordUrl(p), { meth
 async function init() {
   rerender = () => init();
   const q = parseHash();
-  if (q.coord && q.id && q.token) return startParticipant({ coordinator: decodeURIComponent(q.coord), id: q.id, token: q.token });
+  if (q.coord && q.id && q.token) {
+    // Re-opened the invite link and we already hold this swap's keys → resume it (don't re-join with
+    // fresh keys, which the coordinator would reject as "already joined by someone else").
+    const known = (await vault.list().catch(() => [])).includes(q.id);
+    if (known) { try { return resumeSwap(await vault.load(q.id)); } catch { /* fall through to fresh join */ } }
+    return startParticipant({ coordinator: decodeURIComponent(q.coord), id: q.id, token: q.token });
+  }
   const resumable = await vault.list().catch(() => []);
   render(h("div", {},
     screen({
@@ -203,7 +209,10 @@ async function recoverCard(ids) {
   const card = h("div", { class: "card secondary" }, h("h2", {}, t("recoverTitle")), h("p", { class: "note" }, t("recoverBody")));
   for (const id of ids) {
     const s = await vault.load(id);
-    card.append(h("button", { class: "primary", style: "width:100%;margin-top:8px", onclick: () => resumeSwap(s) }, t("resumeBtn", { from: DIR[s.direction]?.from, to: DIR[s.direction]?.to, id: shorten(id, 6) })));
+    const label = (s.qbtSats != null && s.btcSats != null)
+      ? t(s.direction === "btc2qbt" ? "resumeBuy" : "resumeSell", { qbt: sats(s.qbtSats), btc: sats(s.btcSats) })
+      : t("resumeBtn", { from: DIR[s.direction]?.from, to: DIR[s.direction]?.to, id: shorten(id, 6) });
+    card.append(h("button", { class: "primary", style: "width:100%;margin-top:8px", onclick: () => resumeSwap(s) }, label));
   }
   const fileInput = h("input", { type: "file", accept: "application/json", style: "display:none", onchange: async (e) => { const f = e.target.files?.[0]; if (!f) return; try { resumeSwap(importBackup(await f.text())); } catch (err) { alert(t("errReadBackup", { msg: err.message })); } } });
   card.append(fileInput, h("div", { class: "btns", style: "margin-top:10px" }, h("button", { style: "font-size:12.5px; padding:7px 12px", onclick: () => fileInput.click() }, ids.length ? t("uploadInstead") : t("uploadBackup"))));
@@ -286,7 +295,12 @@ async function doCreate() {
 }
 async function doJoin() {
   flow.client = new SwapClient({ coordinator: flow.coordinator });
-  await flow.client.join({ id: flow.joinId, token: flow.joinToken, ...destsForClient() });
+  try {
+    await flow.client.join({ id: flow.joinId, token: flow.joinToken, ...destsForClient() });
+  } catch (e) {
+    if (/already been joined|already joined/i.test(e.message || "")) throw new Error(t("errAlreadyJoined"));
+    throw e;
+  }
   await vault.save(flow.client.secrets());
   stepBackup(() => startLive());
 }
@@ -472,6 +486,16 @@ function renderChrome() {
       onclick: (e) => { e.preventDefault(); if (getLang() !== code) { setLang(code); renderChrome(); rerender(); } } }, label));
   }
 }
+
+// Clicking the Qbit logo clears the current flow and returns to the home screen.
+function goHome() {
+  flow.client?.stop?.();
+  Object.assign(flow, { mode: null, direction: null, btcSats: 0, qbtSats: 0, receiveAddr: "", refundAddr: "", client: null, bobLink: null, _recoverySaved: false });
+  liveGuard = { risky: false };
+  if (location.hash) history.replaceState(null, "", location.pathname + location.search);
+  init();
+}
+for (const sel of ["header .mark", "header h1"]) document.querySelector(sel)?.addEventListener("click", goHome);
 
 renderChrome();
 init();
