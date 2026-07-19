@@ -201,7 +201,7 @@ function startPeer() {
 }
 
 async function recoverCard(ids) {
-  const card = h("div", { class: "card" }, h("h2", {}, t("recoverTitle")), h("p", { class: "note" }, t("recoverBody")));
+  const card = h("div", { class: "card secondary" }, h("h2", {}, t("recoverTitle")), h("p", { class: "note" }, t("recoverBody")));
   for (const id of ids) {
     const s = await vault.load(id);
     card.append(h("button", { class: "primary", style: "width:100%;margin-top:8px", onclick: () => resumeSwap(s) }, t("resumeBtn", { from: DIR[s.direction]?.from, to: DIR[s.direction]?.to, id: shorten(id, 6) })));

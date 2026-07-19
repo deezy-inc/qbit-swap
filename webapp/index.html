@@ -4,15 +4,16 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>qbit swap — atomic BTC ⇄ QBT</title>
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%235b8cff'/%3E%3Cpath d='M9 13h11l-3-3m6 9H12l3 3' stroke='white' stroke-width='2.2' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E" />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%231ab453'/%3E%3Ccircle cx='14' cy='15' r='6.2' fill='%2307110b'/%3E%3Ccircle cx='23' cy='23' r='3.1' fill='%2307110b'/%3E%3C/svg%3E" />
 <style>
   :root {
     /* dark-first: a focused, non-custodial financial tool reads best on a calm dark surface */
-    --bg:#0d0f14; --surface:#161922; --surface-2:#1d2130; --raised:#222739;
-    --line:#282d3b; --line-2:#333a4c;
-    --ink:#f3f5fb; --ink-2:#ccd2e0; --mut:#8e97ab;
-    --accent:#6b93ff; --accent-ink:#0b1020; --accent-soft:rgba(107,147,255,.14); --accent-line:rgba(107,147,255,.4);
-    --good:#48c98a; --good-soft:rgba(72,201,138,.14);
+    /* Qbit brand palette (from qbit.org) — green accent on a green-tinted dark base */
+    --bg:#07110b; --surface:#0e1712; --surface-2:#14211b; --raised:#1a2c22;
+    --line:#1e3327; --line-2:#294435;
+    --ink:#e9f2ec; --ink-2:#c0d0c6; --mut:#7f948a;
+    --accent:#1ab453; --accent-ink:#03130a; --accent-soft:rgba(26,180,83,.15); --accent-line:rgba(26,180,83,.42); --accent-bright:#20c760;
+    --good:#20c760; --good-soft:rgba(32,199,96,.15);
     --warn:#e7b45a; --warn-soft:rgba(231,180,90,.14);
     --bad:#ec6a75;  --bad-soft:rgba(236,106,117,.14);
     --mono:ui-monospace,"SF Mono",SFMono-Regular,Menlo,Consolas,monospace;
@@ -23,19 +24,7 @@
     --ease:cubic-bezier(.22,.61,.36,1); --dur:.17s;
     color-scheme:dark;
   }
-  @media (prefers-color-scheme: light) {
-    :root {
-      --bg:#f4f6fa; --surface:#ffffff; --surface-2:#f0f3f8; --raised:#ffffff;
-      --line:#e4e8f0; --line-2:#d5dbe6;
-      --ink:#141824; --ink-2:#3a4152; --mut:#616a7e;
-      --accent:#3f6fe6; --accent-ink:#ffffff; --accent-soft:rgba(63,111,230,.1); --accent-line:rgba(63,111,230,.34);
-      --good:#149a5c; --good-soft:rgba(20,154,92,.1);
-      --warn:#a9720f; --warn-soft:rgba(169,114,15,.1);
-      --bad:#cf3b46;  --bad-soft:rgba(207,59,70,.1);
-      --shadow:0 1px 2px rgba(20,30,60,.06), 0 12px 28px -16px rgba(20,30,60,.28);
-      color-scheme:light;
-    }
-  }
+  /* Dark mode always (Qbit brand look) — no light-mode override. */
   * { box-sizing:border-box; }
   html { -webkit-text-size-adjust:100%; }
   body {
@@ -49,9 +38,8 @@
   /* header */
   header { display:flex; align-items:center; gap:11px; padding:16px 22px; border-bottom:1px solid var(--line);
     background:linear-gradient(var(--surface),var(--bg)); position:sticky; top:0; z-index:20; backdrop-filter:saturate(1.2); }
-  .mark { width:26px; height:26px; border-radius:7px; flex:none; display:grid; place-items:center;
-    background:var(--accent); color:var(--accent-ink); box-shadow:0 2px 10px -3px var(--accent); }
-  .mark svg { width:17px; height:17px; }
+  .mark { width:27px; height:27px; flex:none; display:grid; place-items:center; color:var(--accent); }
+  .mark svg { width:27px; height:27px; display:block; }
   header h1 { font-size:15px; font-weight:650; margin:0; letter-spacing:-.01em; }
   header .tag { color:var(--mut); font-size:12.5px; margin-left:2px; }
   @media (max-width:560px){ header .tag { display:none; } }
@@ -106,12 +94,16 @@
   .btns { display:flex; gap:10px; flex-wrap:wrap; margin-top:15px; }
 
   /* the big directional choices on the landing */
-  .choice { width:100%; text-align:left; padding:16px 17px; margin-top:11px; display:flex; align-items:center; gap:14px; }
-  .choice .glyph { width:34px; height:34px; border-radius:9px; flex:none; display:grid; place-items:center;
-    background:var(--accent-soft); color:var(--accent); font-size:15px; font-weight:700; }
-  .choice .ct { display:flex; flex-direction:column; gap:2px; }
-  .choice .ct b { font-size:15.5px; font-weight:600; letter-spacing:-.01em; }
-  .choice .ct span { font-size:13px; color:var(--mut); font-weight:400; }
+  .choice { width:100%; text-align:left; padding:21px 20px; margin-top:13px; display:flex; align-items:center; gap:16px; }
+  .choice .glyph { width:42px; height:42px; border-radius:11px; flex:none; display:grid; place-items:center;
+    background:var(--accent-soft); color:var(--accent); font-size:19px; font-weight:700; }
+  .choice .ct { display:flex; flex-direction:column; gap:3px; }
+  .choice .ct b { font-size:18px; font-weight:640; letter-spacing:-.01em; }
+  .choice .ct span { font-size:13.5px; color:var(--mut); font-weight:400; }
+  /* secondary card — the resume/recovery section reads as a quieter, utility block */
+  .card.secondary { background:transparent; box-shadow:none; border-color:var(--line); padding:15px 17px; margin-top:6px; }
+  .card.secondary h2 { font-size:13px; font-weight:600; color:var(--mut); letter-spacing:.01em; margin-bottom:5px; }
+  .card.secondary .note { font-size:12.5px; }
   .choice .arr { margin-left:auto; color:var(--mut); transition:transform var(--dur) var(--ease), color var(--dur); }
   .choice:hover .arr { transform:translateX(3px); color:var(--accent); }
 
@@ -139,7 +131,7 @@
   .dot { width:8px; height:8px; border-radius:50%; flex:none; display:inline-block; }
   .dot.live { background:var(--good); box-shadow:0 0 0 0 var(--good-soft); animation:pulse 2.4s var(--ease) infinite; }
   .dot.idle { background:var(--warn); }
-  @keyframes pulse { 0%{box-shadow:0 0 0 0 rgba(72,201,138,.5);} 70%{box-shadow:0 0 0 6px rgba(72,201,138,0);} 100%{box-shadow:0 0 0 0 rgba(72,201,138,0);} }
+  @keyframes pulse { 0%{box-shadow:0 0 0 0 rgba(32,199,96,.5);} 70%{box-shadow:0 0 0 6px rgba(32,199,96,0);} 100%{box-shadow:0 0 0 0 rgba(32,199,96,0);} }
   .statusline { display:flex; align-items:center; gap:8px; }
 
   @media (prefers-reduced-motion: reduce) {
@@ -150,8 +142,8 @@
 </head>
 <body>
 <header>
-  <span class="mark" aria-hidden="true"><svg viewBox="0 0 32 32"><path d="M9 13h11l-3-3m6 9H12l3 3" stroke="currentColor" stroke-width="2.4" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
-  <h1>qbit&nbsp;swap</h1>
+  <span class="mark" aria-hidden="true"><svg viewBox="0 0 320 320" fill="currentColor"><path d="m159.745 75.5137c46.2 0 83.652 37.4503 83.652 83.6483 0 46.197-37.452 83.648-83.652 83.648-46.199 0-83.6516-37.451-83.6516-83.648 0-46.198 37.4526-83.6483 83.6516-83.6483z"/><path d="m264.882 234.338c16.044 0 29.049 13.005 29.049 29.048 0 16.042-13.005 29.048-29.049 29.048-16.043 0-29.049-13.006-29.049-29.048 0-16.043 13.006-29.048 29.049-29.048z"/><path d="m46.1611 46.159c62.0959-62.0934 163.4069-61.4602 226.2849 1.4142 41.915 41.9136 56.167 100.9048 42.618 153.9748l-.026-.007c-1.478 5.001-6.104 8.652-11.584 8.652-6.672-.001-12.081-5.409-12.081-12.081 0-1.328.217-2.605.613-3.8 11.713-45.226-.14-95.2914-35.565-130.715-53.246-53.2434-139.575-53.2434-192.821 0-53.2456 53.243-53.2452 139.568.0007 192.812 35.4457 35.444 85.5513 47.29 130.7993 35.543 1.17-.377 2.416-.582 3.711-.582 6.672 0 12.081 5.408 12.081 12.08 0 5.477-3.645 10.099-8.642 11.58l.006.02c-53.071 13.548-112.0653-.704-153.9806-42.617-62.8774-62.874-63.5106-164.181-1.4143-226.274z"/></svg></span>
+  <h1>Qbit&nbsp;swap</h1>
   <span class="tag" id="tagline"></span>
   <a class="gh" href="https://github.com/deezy-inc/qbit-swap" target="_blank" rel="noopener" aria-label="GitHub repository" title="Source on GitHub">
     <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
