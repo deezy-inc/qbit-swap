@@ -34,7 +34,7 @@ const en = {
   // backup / share
   saveBackup: "Save your backup",
   backupSub: "A small text file that can finish or refund this swap if you close this tab. Keep it until the swap completes.",
-  backupNote: "For now this file is unencrypted — treat it like a key for the next ~20 minutes.",
+  backupNote: "For now this file is unencrypted — treat it like a key until the swap completes.",
   downloadBackupBtn: "Download backup file", backupDownloaded: "Backup downloaded ✓",
   confirmSavedBackup: "I have saved my backup file in a safe place, and I understand I could lose my coins if I lose this file.",
   shareTitle: "Send this link to your counterparty",
@@ -119,7 +119,7 @@ const zh = {
   createSwap: "创建兑换", joinSwap: "加入兑换",
   saveBackup: "保存您的备份",
   backupSub: "一个小文本文件，即使关闭此标签页也能完成或退款此兑换。请保留到兑换完成。",
-  backupNote: "目前此文件未加密——在接下来约 20 分钟内请将其视为密钥妥善保管。",
+  backupNote: "目前此文件未加密——在兑换完成前请将其视为密钥妥善保管。",
   downloadBackupBtn: "下载备份文件", backupDownloaded: "备份已下载 ✓",
   confirmSavedBackup: "我已将备份文件保存在安全的地方，并且我明白如果丢失此文件，我可能会失去我的币。",
   shareTitle: "将此链接发送给您的对手方",

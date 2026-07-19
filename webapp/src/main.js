@@ -129,7 +129,6 @@ async function init() {
 
 function chooseDirection(direction) {
   flow.direction = direction;
-  flow.btcSats = 100000000; flow.qbtSats = 500000000;
   if (ORDERBOOK) return showMarket(direction);   // order book (flagged); otherwise go straight to peer-to-peer
   flow.mode = "create"; stepConfirm();
 }
@@ -228,8 +227,8 @@ function stepConfirm() {
 function stepAmount() {
   rerender = stepAmount;
   const { send, recv } = roleCoins();
-  const sendIn = field(t("amountPlaceholder", { coin: send }), sats(coinSats(send)));
-  const recvIn = field(t("amountPlaceholder", { coin: recv }), sats(coinSats(recv)));
+  const sendIn = field(t("amountPlaceholder", { coin: send }), coinSats(send) ? sats(coinSats(send)) : "");
+  const recvIn = field(t("amountPlaceholder", { coin: recv }), coinSats(recv) ? sats(coinSats(recv)) : "");
   render(screen({
     title: t("howMuch"),
     body: [h("label", {}, t("youSendCoin", { coin: send })), sendIn, h("label", {}, t("youReceiveCoin", { coin: recv })), recvIn],
@@ -249,7 +248,7 @@ function stepReceive() {
   const inp = field(t("receivePlaceholder", { coin: recv }));
   if (flow.receiveAddr) inp.value = flow.receiveAddr; else prefill(inp, recv);
   render(screen({
-    title: t("receiveTitle", { coin: recv }), subtitle: t("receiveSub", { coin: recv }),
+    title: t("receiveTitle", { coin: recv }),
     body: [inp, h("p", { class: "note" }, t("feeNote"))], cta: t("continue"),
     onCta: () => { flow.receiveAddr = validAddr(inp.value, recv); stepRefund(); },
     back: flow.mode === "create" ? () => stepAmount() : flow.mode === "take" ? () => stepTakeConfirm() : () => stepInvited(),
@@ -263,8 +262,8 @@ function stepRefund() {
   if (flow.refundAddr) inp.value = flow.refundAddr; else prefill(inp, send);
   const cta = flow.mode === "create" ? t("createSwap") : flow.mode === "take" ? (flow.takeAction === "buy" ? t("buyNow") : t("sellNow")) : t("joinSwap");
   render(screen({
-    title: t("refundTitle", { coin: send }), subtitle: t("refundSub"),
-    body: [inp], cta,
+    title: t("refundTitle", { coin: send }),
+    body: [h("p", { class: "note", style: "margin:18px 0 22px" }, t("refundSub")), inp], cta,
     onCta: async () => {
       flow.refundAddr = validAddr(inp.value, send);
       flow.mode === "create" ? await doCreate() : flow.mode === "take" ? await doTake() : await doJoin();
