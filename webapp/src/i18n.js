@@ -71,6 +71,10 @@ const en = {
   amountPlaceholder: "amount in {coin}",
   confirmDiscordPre: "You can try finding a trading partner in the ", confirmDiscordLink: "Qbit Discord", confirmDiscordPost: ".",
   priceLabel: "Price", priceUsd: "$ per QBT", priceBtc: "₿ per QBT",
+  // recent trades (feature-flagged)
+  tradesTab: "Recent trades", tradesTitle: "Recent trades",
+  tradesNote: "Recently completed swaps — amounts and price only.",
+  tradesEmpty: "No settled trades yet.", tradesWhen: "When",
   // receive / refund
   receiveTitle: "Where would you like to receive your {coin}?",
   receiveSub: "Your counterparty's {coin} is released to this address when the swap completes.",
@@ -209,6 +213,9 @@ const zh = {
   amountPlaceholder: "{coin} 数量",
   confirmDiscordPre: "您可以尝试在 ", confirmDiscordLink: "Qbit Discord", confirmDiscordPost: " 中寻找交易伙伴。",
   priceLabel: "价格", priceUsd: "$ / QBT", priceBtc: "₿ / QBT",
+  tradesTab: "近期成交", tradesTitle: "近期成交",
+  tradesNote: "近期完成的兑换——仅显示金额和价格。",
+  tradesEmpty: "暂无已结算的成交。", tradesWhen: "时间",
   receiveTitle: "您希望在哪里接收您的 {coin}？",
   receiveSub: "兑换完成时，对手方的 {coin} 将发送到此地址。",
   receivePlaceholder: "您的 {coin} 接收地址",

@@ -11,6 +11,10 @@ const json = (res, code, body) => { res.writeHead(code, { "content-type": "appli
 const MAX_BODY = 1 << 20;   // 1 MB — finish bundles (pre-signed txs) are the largest legit input, well under this
 const readBody = (req) => new Promise((resolve) => { let b = ""; req.on("data", (c) => { b += c; if (b.length > MAX_BODY) { req.destroy(); resolve({}); } }); req.on("end", () => { try { resolve(b ? JSON.parse(b) : {}); } catch { resolve({}); } }); });
 
+// Public recent-trades feed — OFF by default. When PUBLIC_TRADES=1, GET /trades returns recently
+// COMPLETED swaps (amounts + price + time only; no tokens, addresses, or keys).
+const PUBLIC_TRADES = process.env.PUBLIC_TRADES === "1";
+
 // ── rate limit: sliding window per IP (protects create + write endpoints) ─────
 const WINDOW_MS = 60_000, MAX_HITS = Number(process.env.RATE_MAX || 120);
 const hits = new Map();
@@ -42,6 +46,18 @@ async function handle(req, res) {
   if (method === "OPTIONS") { res.writeHead(204); return res.end(); }
   try {
     if (method === "GET" && url.pathname === "/health") return json(res, 200, { ok: true, swaps: allSwaps().length });
+
+    // Public recent-trades feed (only successfully settled swaps; no per-party secrets).
+    if (method === "GET" && url.pathname === "/trades") {
+      if (!PUBLIC_TRADES) return json(res, 404, { error: "not found" });
+      const lim = Math.min(Number(url.searchParams.get("limit")) || 50, 200);
+      const trades = allSwaps()
+        .filter((s) => s.state === "COMPLETE" && s.terms)
+        .sort((a, b) => (b.settledAt || 0) - (a.settledAt || 0))
+        .slice(0, lim)
+        .map((s) => ({ direction: s.terms.direction, btcSats: s.terms.btcSats, qbtSats: s.terms.qbtSats, price: s.terms.btcSats / s.terms.qbtSats, settledAt: s.settledAt || null }));
+      return json(res, 200, trades);
+    }
     if (method !== "GET" && rateLimited(ip)) return json(res, 429, { error: "rate limited" });
 
     if (method === "POST" && url.pathname === "/swaps") {

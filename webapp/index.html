@@ -43,8 +43,9 @@
   header h1 { font-size:15px; font-weight:650; margin:0; letter-spacing:-.01em; cursor:pointer; }
   header .tag { color:var(--mut); font-size:12.5px; margin-left:2px; }
   @media (max-width:560px){ header .tag { display:none; } }
-  .navlink { margin-left:auto; color:var(--mut); font-size:13px; font-weight:550; cursor:pointer; text-decoration:none; }
+  .navlink { color:var(--mut); font-size:13px; font-weight:550; cursor:pointer; text-decoration:none; }
   .navlink:hover { color:var(--ink); }
+  #info-link { margin-left:auto; }   /* anchors the right-hand nav group; trades-link takes over when shown */
   .gh { margin-left:10px; display:inline-grid; place-items:center; width:32px; height:32px; border-radius:8px; color:var(--mut);
     border:1px solid transparent; transition:color var(--dur), background var(--dur), border-color var(--dur); }
   .gh:hover { color:var(--ink); background:var(--surface-2); border-color:var(--line); }
@@ -115,6 +116,13 @@
   .kv { display:grid; grid-template-columns:auto 1fr; gap:7px 14px; font-size:13px; align-items:baseline; }
   .kv .mono { background:var(--surface-2); padding:3px 7px; border-radius:6px; }
   .amt, .num { font-variant-numeric:tabular-nums; }
+
+  /* recent-trades table */
+  .trades { width:100%; border-collapse:collapse; margin-top:6px; }
+  .trades th, .trades td { text-align:right; padding:9px 6px; border-bottom:1px solid var(--line); font-size:13.5px; white-space:nowrap; font-variant-numeric:tabular-nums; }
+  .trades th { color:var(--mut); font-weight:550; font-size:12px; }
+  .trades th:first-child, .trades td:first-child { text-align:left; }
+  .trades td.when { color:var(--mut); }
 
   /* status badge — soft tinted fill, not just an outline */
   .badge { display:inline-flex; align-items:center; gap:6px; padding:4px 11px; border-radius:999px;
@@ -201,6 +209,7 @@
 <header>
   <span class="mark" aria-hidden="true"><svg viewBox="0 0 320 320" fill="currentColor"><path d="m159.745 75.5137c46.2 0 83.652 37.4503 83.652 83.6483 0 46.197-37.452 83.648-83.652 83.648-46.199 0-83.6516-37.451-83.6516-83.648 0-46.198 37.4526-83.6483 83.6516-83.6483z"/><path d="m264.882 234.338c16.044 0 29.049 13.005 29.049 29.048 0 16.042-13.005 29.048-29.049 29.048-16.043 0-29.049-13.006-29.049-29.048 0-16.043 13.006-29.048 29.049-29.048z"/><path d="m46.1611 46.159c62.0959-62.0934 163.4069-61.4602 226.2849 1.4142 41.915 41.9136 56.167 100.9048 42.618 153.9748l-.026-.007c-1.478 5.001-6.104 8.652-11.584 8.652-6.672-.001-12.081-5.409-12.081-12.081 0-1.328.217-2.605.613-3.8 11.713-45.226-.14-95.2914-35.565-130.715-53.246-53.2434-139.575-53.2434-192.821 0-53.2456 53.243-53.2452 139.568.0007 192.812 35.4457 35.444 85.5513 47.29 130.7993 35.543 1.17-.377 2.416-.582 3.711-.582 6.672 0 12.081 5.408 12.081 12.08 0 5.477-3.645 10.099-8.642 11.58l.006.02c-53.071 13.548-112.0653-.704-153.9806-42.617-62.8774-62.874-63.5106-164.181-1.4143-226.274z"/></svg></span>
   <h1>Qbit&nbsp;swap</h1>
+  <a class="navlink" id="trades-link" href="#trades" style="display:none">Recent trades</a>
   <a class="navlink" id="info-link" href="#info">Info</a>
   <a class="gh" href="https://github.com/deezy-inc/qbit-swap" target="_blank" rel="noopener" aria-label="GitHub repository" title="Source on GitHub">
     <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>

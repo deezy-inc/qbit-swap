@@ -34,6 +34,7 @@ const cfg = [
   `window.QBIT_COORDINATOR=${JSON.stringify(`${PUBLIC_URL}/coord`)};`,
   `window.QBIT_HRPS=${JSON.stringify(hrps)};`,
   process.env.ORDERBOOK ? "window.QBIT_ORDERBOOK=true;" : "",
+  process.env.RECENT_TRADES ? "window.QBIT_RECENT_TRADES=true;" : "",
 ].join("");
 const CONFIG = `<script>${cfg}</script>`;
 

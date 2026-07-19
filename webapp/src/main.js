@@ -36,6 +36,7 @@ function validAddr(value, coin) {
 const DEFAULT_COORD = globalThis.QBIT_COORDINATOR || "http://127.0.0.1:8787";
 const FAUCET = globalThis.QBIT_TRIAL_FAUCET || null;
 const ORDERBOOK = globalThis.QBIT_ORDERBOOK === true;   // feature flag, default OFF — peer-to-peer only
+const RECENT_TRADES = globalThis.QBIT_RECENT_TRADES === true;   // feature flag, default OFF — public recent-trades tab
 const appEl = document.getElementById("app");
 const vault = new Vault();
 let rerender = () => init();     // re-invoked on language change to redraw the current screen
@@ -58,6 +59,8 @@ function netReceive(recv, feerates) {
 }
 const feeStr = (coin, fee) => (coin === "BTC" ? `${fee.toLocaleString()} sat` : `${sats(fee)} QBT`);
 const shorten = (s, n = 10) => (s && s.length > 2 * n ? `${s.slice(0, n)}…${s.slice(-n)}` : s);
+const trimZeros = (s) => s.replace(/0+$/, "").replace(/\.$/, "");
+const ago = (ts) => { const s = (Date.now() - ts) / 1000; return s < 60 ? `${Math.floor(s)}s` : s < 3600 ? `${Math.floor(s / 60)}m` : s < 86400 ? `${Math.floor(s / 3600)}h` : `${Math.floor(s / 86400)}d`; };
 const parseHash = () => Object.fromEntries(new URLSearchParams(location.hash.slice(1)));
 
 // ── tiny DOM helper ───────────────────────────────────────────────────────────
@@ -198,6 +201,29 @@ function stepInfo() {
     ],
     back: () => { rerender = _prevView || (() => init()); rerender(); },
   }));
+}
+
+// Recent trades — a public feed of successfully settled swaps (feature-flagged, header tab).
+async function stepTrades() {
+  if (rerender !== stepTrades) _prevView = rerender;
+  rerender = stepTrades;
+  const back = () => { rerender = _prevView || (() => init()); rerender(); };
+  let trades = null;
+  try { trades = await coordGet("/trades"); } catch { trades = []; }
+  const body = [h("p", { class: "note", style: "margin-top:-4px" }, t("tradesNote"))];
+  if (!trades.length) {
+    body.push(h("p", { class: "muted", style: "margin-top:16px" }, t("tradesEmpty")));
+  } else {
+    const rows = trades.map((tr) => h("tr", {},
+      h("td", {}, `${sats(tr.qbtSats)} QBT`),
+      h("td", {}, `${sats(tr.btcSats)} BTC`),
+      h("td", {}, `${trimZeros(tr.price.toFixed(8))} BTC/QBT`),
+      h("td", { class: "when" }, tr.settledAt ? ago(tr.settledAt) : "—")));
+    body.push(h("table", { class: "trades" },
+      h("thead", {}, h("tr", {}, h("th", {}, "QBT"), h("th", {}, "BTC"), h("th", {}, t("priceLabel")), h("th", {}, t("tradesWhen")))),
+      h("tbody", {}, ...rows)));
+  }
+  render(screen({ title: t("tradesTitle"), body, back }));
 }
 
 function chooseDirection(direction) {
@@ -598,6 +624,7 @@ window.addEventListener("drop", async (e) => {
 // ── language switcher (header) ────────────────────────────────────────────────
 function renderChrome() {
   const info = document.getElementById("info-link"); if (info) info.textContent = t("infoTab");
+  const trades = document.getElementById("trades-link"); if (trades) trades.textContent = t("tradesTab");
   const el = document.getElementById("lang"); if (!el) return;
   while (el.firstChild) el.removeChild(el.firstChild);
   for (const [code, label] of LANGS) {
@@ -616,6 +643,10 @@ function goHome() {
 }
 for (const sel of ["header .mark", "header h1"]) document.querySelector(sel)?.addEventListener("click", goHome);
 document.querySelector("#info-link")?.addEventListener("click", (e) => { e.preventDefault(); stepInfo(); });
+if (RECENT_TRADES) {
+  const tl = document.getElementById("trades-link"), il = document.getElementById("info-link");
+  if (tl) { tl.style.display = ""; tl.style.marginLeft = "auto"; if (il) il.style.marginLeft = "0"; tl.addEventListener("click", (e) => { e.preventDefault(); stepTrades(); }); }
+}
 
 renderChrome();
 init();
