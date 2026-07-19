@@ -176,7 +176,9 @@ export class Chain {
     try { const mi = await this.rpc("getmempoolinfo"); const f = mi?.mempoolminfee ?? mi?.minrelaytxfee; if (f > 0) floor = f * 1e5; } catch { /* keep 1 */ }
     const norm = (v) => Math.max(1, Math.round(v ?? floor));
     const [fast, half, hour] = [await est(1, "CONSERVATIVE"), await est(3, "ECONOMICAL"), await est(6, "ECONOMICAL")];
-    return { fastestFee: norm(fast), halfHourFee: norm(half ?? fast), hourFee: norm(hour ?? half ?? fast) };
+    // `minimumFee` = the node's min-relay feerate (matches the mempool.space field name); the client
+    // uses it as the absolute fee floor so a sweep never drops below relay.
+    return { fastestFee: norm(fast), halfHourFee: norm(half ?? fast), hourFee: norm(hour ?? half ?? fast), minimumFee: Math.max(1, Math.round(floor)) };
   }
 
   // Qbit only: reorg-safe confirmation target for a trade value + security level.

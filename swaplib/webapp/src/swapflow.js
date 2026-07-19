@@ -154,11 +154,11 @@ export class SwapClient {
     const claimPreimage = this.role === "alice" ? this.secret : new Uint8Array(0);
     // skip any tier whose fee would leave a dust/negative output (defensive; createSwap already floors amounts)
     const amount = v.funding[claim].amountSats;
-    const affordable = LADDER[claim].map((fr) => ({ fr, fee: feeFor(claim, "claim", fr) })).filter(({ fee }) => amount - fee > DUST);
-    const tiers = await Promise.all((affordable.length ? affordable : [{ fr: LADDER[claim][0], fee: feeFor(claim, "claim", LADDER[claim][0]) }]).map(async ({ fr, fee }) =>
+    const affordable = LADDER[claim].map((fr) => ({ fr, fee: feeFor(claim, "claim", fr, v.feerates) })).filter(({ fee }) => amount - fee > DUST);
+    const tiers = await Promise.all((affordable.length ? affordable : [{ fr: LADDER[claim][0], fee: feeFor(claim, "claim", LADDER[claim][0], v.feerates) }]).map(async ({ fr, fee }) =>
       ({ feerate: fr, tx: hex(await this.#build(v, claim, "claim", claimPreimage, fee)) })));
     const refundFeerate = LADDER[refund][Math.floor(LADDER[refund].length / 2)];
-    const refundTx = hex(await this.#build(v, refund, "refund", new Uint8Array(0), feeFor(refund, "refund", refundFeerate)));
+    const refundTx = hex(await this.#build(v, refund, "refund", new Uint8Array(0), feeFor(refund, "refund", refundFeerate, v.feerates)));
     const bundle = {
       claim: { leg: claim, needsPreimage: this.role !== "alice", tiers },
       refund: { leg: refund, tx: refundTx },
@@ -175,7 +175,7 @@ export class SwapClient {
   // Live claim/refund the party signs itself: size the BTC fee at mempool's High-priority tier
   // (v.feerates.fastestFee) so it confirms promptly — the pre-signed fee ladder is only the fallback
   // the watchtower uses when this party is OFFLINE. Never let the fee eat the output below dust.
-  #liveFee(v, leg, kind) { const amt = v.funding?.[leg]?.amountSats || 0; return Math.min(dynFee(leg, kind, v.feerates), Math.max(FEE_FLOOR[leg], amt - DUST)); }
+  #liveFee(v, leg, kind) { const amt = v.funding?.[leg]?.amountSats || 0; return Math.min(dynFee(leg, kind, v.feerates), amt - DUST); }
   async #claim(v, leg, preimage) { return this.#send(leg, "claim", await this.#build(v, leg, "claim", preimage, this.#liveFee(v, leg, "claim"))); }
   async #refund(v, leg) { return this.#send(leg, "refund", await this.#build(v, leg, "refund", new Uint8Array(0), this.#liveFee(v, leg, "refund"))); }
 
@@ -208,13 +208,19 @@ export class SwapClient {
 }
 
 // Fixed fee ladders (sat/vB) the client pre-signs for the WATCHTOWER fallback; the coordinator
-// picks/escalates tiers using live mempool.space feerates when it must act for an offline party. BTC
-// spans economy→extreme; Qbit is uncongested so a low pair suffices.
+// picks/escalates tiers using live feerates when it must act for an offline party. BTC spans
+// economy→extreme; Qbit is uncongested so a low pair suffices.
 const DUST = 546;
 const LADDER = { btc: [2, 8, 25, 75, 200], qbit: [1, 5] };
-const VBYTES = { btc: { claim: 150, refund: 120 }, qbit: { claim: 1000, refund: 1000 } };   // rough (SLH-DSA witness dominates the qbit legs)
-const FEE_FLOOR = { btc: 400, qbit: 8000 };
-const feeFor = (leg, kind, feerate) => Math.max(FEE_FLOOR[leg], Math.round(feerate * VBYTES[leg][kind]));
+// vsize per sweep (measured on regtest). IMPORTANT: Qbit's SLH-DSA witness gets NO segwit discount
+// (vsize == weight ≈ 3.9k vB), so these must be the real sizes — a low estimate underpays the feerate
+// and the tx can stall. Slightly conservative (real: qbit ~3900, btc refund ~130) so a floored fee
+// still clears relay.
+const VBYTES = { btc: { claim: 165, refund: 140 }, qbit: { claim: 4200, refund: 4200 } };
+// Absolute fee floor (sats): never pay below the node's own min-relay feerate for this tx's size
+// (`feerates.<leg>.minimumFee` — BTC from mempool.space, Qbit from getmempoolinfo). No hardcoded floor.
+const relayFloor = (leg, kind, feerates) => Math.ceil(Math.max(1, feerates?.[leg]?.minimumFee || 1) * VBYTES[leg][kind]);
+const feeFor = (leg, kind, feerate, feerates) => Math.max(relayFloor(leg, kind, feerates), Math.round(feerate * VBYTES[leg][kind]));
 // The fee (sats) for a live-signed claim/refund, sized from the coordinator's per-chain recommendation
 // (`view.feerates = { btc, qbit }`): High priority (fastestFee) for the urgent claim, Medium
 // (halfHourFee) for the timelock-gated refund. BTC comes from mempool.space; Qbit from the node's own
@@ -223,5 +229,5 @@ const feeFor = (leg, kind, feerate) => Math.max(FEE_FLOOR[leg], Math.round(feera
 export function dynFee(leg, kind, feerates) {
   const tier = kind === "claim" ? "fastestFee" : "halfHourFee";
   const fr = Math.max(1, feerates?.[leg]?.[tier] || 0);
-  return Math.max(FEE_FLOOR[leg], Math.round(fr * VBYTES[leg][kind]));
+  return Math.max(relayFloor(leg, kind, feerates), Math.round(fr * VBYTES[leg][kind]));
 }
