@@ -121,6 +121,24 @@ async function init() {
     return startParticipant({ coordinator: decodeURIComponent(q.coord), id: q.id, token: q.token });
   }
   const resumable = await vault.list().catch(() => []);
+  if (resumable.length) return stepChoose(resumable);   // returning user with a swap → skip the intro
+  stepWelcome();
+}
+
+// Landing page — the first thing a new visitor sees.
+function stepWelcome() {
+  rerender = stepWelcome;
+  render(screen({
+    title: t("welcomeTitle"),
+    body: [h("p", { class: "note" }, t("welcomeBody"))],
+    cta: t("continue"), onCta: () => stepChoose(),
+  }));
+}
+
+// Direction chooser + resume/recover.
+async function stepChoose(resumable) {
+  rerender = () => stepChoose(resumable);
+  const list = resumable || (await vault.list().catch(() => []));
   render(h("div", {},
     screen({
       title: t("swapWhichWay"), subtitle: t("nonCustodial"),
@@ -128,9 +146,33 @@ async function init() {
         bigChoice("₿", t("haveBtc"), t("haveBtcSub"), () => chooseDirection("btc2qbt")),
         bigChoice("Q", t("haveQbt"), t("haveQbtSub"), () => chooseDirection("qbt2btc")),
       ],
+      back: () => stepWelcome(),
     }),
-    await recoverCard(resumable),
+    await recoverCard(list),
   ));
+}
+
+// Info / how-it-works + FAQ (reached from the header tab; Back returns to where you were).
+let _prevView = null;
+function stepInfo() {
+  if (rerender !== stepInfo) _prevView = rerender;
+  rerender = stepInfo;
+  const step = (n, k) => h("div", { class: "note", style: "display:flex;gap:9px;margin-top:9px" },
+    h("span", { style: "color:var(--accent);font-weight:700" }, n + "."), h("span", {}, t(k)));
+  const faq = (q, a) => h("div", { style: "margin-top:16px" },
+    h("div", { style: "font-weight:600;color:var(--ink)" }, t(q)),
+    h("p", { class: "note", style: "margin-top:3px" }, t(a)));
+  render(screen({
+    title: t("infoHowTitle"),
+    body: [
+      h("p", { class: "note" }, t("infoIntro")),
+      step(1, "infoStep1"), step(2, "infoStep2"), step(3, "infoStep3"), step(4, "infoStep4"),
+      h("h2", { style: "margin:24px 0 0" }, t("infoFaqTitle")),
+      faq("faqCustodialQ", "faqCustodialA"), faq("faqStallQ", "faqStallA"), faq("faqHowLongQ", "faqHowLongA"),
+      faq("faqFindQ", "faqFindA"), faq("faqFeesQ", "faqFeesA"), faq("faqWalletQ", "faqWalletA"), faq("faqBackupQ", "faqBackupA"),
+    ],
+    back: () => { rerender = _prevView || (() => init()); rerender(); },
+  }));
 }
 
 function chooseDirection(direction) {
@@ -531,6 +573,7 @@ window.addEventListener("drop", async (e) => {
 // ── language switcher (header) ────────────────────────────────────────────────
 function renderChrome() {
   const tag = document.getElementById("tagline"); if (tag) tag.textContent = t("tagline");
+  const info = document.getElementById("info-link"); if (info) info.textContent = t("infoTab");
   const el = document.getElementById("lang"); if (!el) return;
   while (el.firstChild) el.removeChild(el.firstChild);
   for (const [code, label] of LANGS) {
@@ -548,6 +591,7 @@ function goHome() {
   init();
 }
 for (const sel of ["header .mark", "header h1"]) document.querySelector(sel)?.addEventListener("click", goHome);
+document.querySelector("#info-link")?.addEventListener("click", (e) => { e.preventDefault(); stepInfo(); });
 
 renderChrome();
 init();
