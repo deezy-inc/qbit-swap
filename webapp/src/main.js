@@ -289,7 +289,7 @@ function stepAmount() {
     body: [
       h("label", {}, t("youSendCoin", { coin: send })), sendIn,
       h("label", {}, t("youReceiveCoin", { coin: recv })), recvIn,
-      h("div", { style: "display:flex;justify-content:space-between;align-items:center;gap:10px;margin:14px 0 5px" },
+      h("div", { style: "display:flex;align-items:center;gap:9px;margin:14px 0 5px" },
         h("span", { style: "font-size:12.5px;font-weight:550;color:var(--mut)" }, t("priceLabel")), unitBtn),
       priceIn,
     ],
