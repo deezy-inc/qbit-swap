@@ -181,10 +181,13 @@ export class Chain {
     return { fastestFee: norm(fast), halfHourFee: norm(half ?? fast), hourFee: norm(hour ?? half ?? fast), minimumFee: Math.max(1, Math.round(floor)) };
   }
 
-  // Qbit only: reorg-safe confirmation target for a trade value + security level.
+  // Qbit only: the node's hashrate/reorg model. We use `model.security_per_confirmation` (BTC
+  // confirmations of security each qbit confirmation buys, from observed chainwork incl. AuxPoW) to
+  // price a qbit reorg in BTC. `required_confirmations` targets a fixed 6-BTC-conf equivalent; we don't
+  // gate on it — we scale confirmations to the swap's value instead (swap.js).
   async confTarget(valueSats, level = "high") {
     const r = await this.rpc("getconfirmationtarget", valueSats, level);
-    return { confs: r.required_confirmations, minutes: r.required_minutes, equivalentBtcConfs: r.equivalent_btc_confirmations, level: r.security_level };
+    return { confs: r.required_confirmations, minutes: r.required_minutes, equivalentBtcConfs: r.equivalent_btc_confirmations, level: r.security_level, model: r.model };
   }
   // dev helpers (regtest only)
   async mine(n, addr) { return this.rpc("generatetoaddress", n, addr); }

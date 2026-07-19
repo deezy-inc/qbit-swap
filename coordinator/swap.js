@@ -99,10 +99,50 @@ const HRP = { btc: process.env.BTC_HRP || "bcrt", qbit: process.env.QBIT_HRP || 
 // this ordering in one direction. We instead pick wall-clock windows and convert each to that chain's
 // block count via its block time. For regtest the lab sets tiny values so tests stay fast.
 const BLOCK_SECS = { btc: Number(process.env.BTC_BLOCK_SECS || 600), qbit: Number(process.env.QBIT_BLOCK_SECS || 60) };
-const HTLC_TO_SECS = Number(process.env.HTLC_TO_SECS || 12 * 3600);     // participant's (shorter) window
-const HTLC_FROM_SECS = Number(process.env.HTLC_FROM_SECS || 24 * 3600); // initiator's (longer) window
-if (!(HTLC_FROM_SECS > HTLC_TO_SECS)) throw new Error("HTLC_FROM_SECS must exceed HTLC_TO_SECS — the initiator's leg has to outlast the participant's");
 const locktimeBlocks = (leg, secs) => Math.max(1, Math.ceil(secs / BLOCK_SECS[leg]));
+
+// ── Value-scaled reorg security + timelocks ──────────────────────────────────────────────────
+// Both the reorg-safe confirmation gate AND the timelocks scale with the swap's value instead of a
+// fixed target. Value is measured in BTC (its price is the liquid one). Qbit is SHA-256-mined like
+// Bitcoin, so a qbit reorg is priced in BTC too: the cost to rewrite one qbit confirmation ≈
+// `security_per_confirmation` (BTC-confs bought per qbit conf, from the node's chainwork model incl.
+// AuxPoW) × the BTC block subsidy. We require the cost to reorg the claimed leg to exceed the swap's
+// BTC value by REORG_MARGIN×. Timelocks are then derived from the resulting confirmation count, so a
+// small swap settles + refunds fast while a large one gets deeper confirmations and longer windows.
+const REORG_MARGIN = Number(process.env.REORG_MARGIN || 3);                 // cost-to-reorg ≥ this × swap value
+const MIN_CONFS = { btc: Number(process.env.MIN_CONFS_BTC || 1), qbit: Number(process.env.MIN_CONFS_QBIT || 6) };
+const TO_MULT = Number(process.env.HTLC_TO_MULT || 2);                      // claim window ≈ maturity × this + base
+const TO_BASE_SECS = Number(process.env.HTLC_TO_BASE_SECS || 3600);         // + slack to fund + detect (1h)
+const FROM_GAP_SECS = Number(process.env.HTLC_FROM_GAP_SECS || 3600);       // participant's claim window after the reveal
+const MIN_TO_SECS = Number(process.env.MIN_TO_SECS || 3600);               // floor on the claim window
+const btcSubsidySats = (h) => Math.floor(5_000_000_000 / 2 ** Math.floor(h / 210_000));   // BTC block reward at height h
+
+// Confirmations the initiator's claimed leg (toLeg) must reach so that reorging it costs ≥ REORG_MARGIN
+// × the swap's BTC value. Priced per confirmation in BTC; floored at MIN_CONFS for natural-orphan safety.
+async function reorgConfs(toLeg, btcSats, qbtSats, level, btcHeight) {
+  const btcSub = btcSubsidySats(btcHeight);
+  let costPerConf, extra = {};                                             // BTC sats to reorg one toLeg confirmation
+  if (toLeg === "qbit") {
+    const t = await qbit.confTarget(qbtSats, level);
+    const spc = t.model?.security_per_confirmation || (t.confs ? (t.equivalentBtcConfs || 6) / t.confs : 0);
+    costPerConf = spc * btcSub;
+    extra = { securityPerConf: spc, hashrate: t.model?.total_observed_hashrate };
+  } else {
+    costPerConf = btcSub;                                                   // reorging one BTC block ≈ one BTC subsidy of work
+  }
+  const need = costPerConf > 0 ? Math.ceil((REORG_MARGIN * btcSats) / costPerConf) : MIN_CONFS[toLeg];
+  return { confs: Math.max(MIN_CONFS[toLeg], need), source: toLeg === "qbit" ? "reorg-cost" : "btc-depth", level, valueBtcSats: btcSats, costPerConfSats: Math.round(costPerConf), ...extra };
+}
+
+// Wall-clock timelock windows derived from the gate's maturity (or forced fixed via env, for regtest).
+// The claim window covers maturity plus slack; the funding leg outlasts it so the participant can claim
+// after the preimage is revealed.
+function htlcWindows(toLeg, confs) {
+  if (process.env.HTLC_TO_SECS && process.env.HTLC_FROM_SECS)
+    return { toSecs: Number(process.env.HTLC_TO_SECS), fromSecs: Number(process.env.HTLC_FROM_SECS) };
+  const toSecs = Math.max(MIN_TO_SECS, Math.round(confs * BLOCK_SECS[toLeg] * TO_MULT + TO_BASE_SECS));
+  return { toSecs, fromSecs: toSecs + FROM_GAP_SECS };
+}
 export function createSwap({ btcSats, qbtSats, securityLevel = "high", direction = "btc2qbt" }) {
   if (direction !== "btc2qbt" && direction !== "qbt2btc") throw new Error("bad direction");
   // Reject dust-level swaps: the amount must comfortably exceed claim/refund fees (incl. the top
@@ -150,12 +190,18 @@ async function deriveHtlcs(s) {
   const [qh, bh] = [await qbit.height(), await btc.height()];
   const { fromLeg, toLeg } = s.roles;
   const A = s.party.alice, B = s.party.bob;   // A = initiator, B = participant
-  // fromLeg (initiator funds) gets the LONGER wall-clock window; toLeg (participant funds) the SHORTER
-  // one. Each window is converted to a block count on its OWN chain, so the real-time ordering holds
-  // regardless of which coin is on which leg.
+  // Reorg-safe gate on the leg the initiator claims (toLeg), scaled to the swap's BTC value.
+  const ct = await reorgConfs(toLeg, s.terms.btcSats, s.terms.qbtSats, s.terms.securityLevel, bh);
+  if (process.env.DEV_CONFS_CAP) ct.confs = Math.min(ct.confs, Number(process.env.DEV_CONFS_CAP));
+  s.confsTarget = ct;
+
+  // Timelocks derived from the gate's maturity: fromLeg (initiator funds) gets the LONGER window,
+  // toLeg (participant funds) the SHORTER one. Each wall-clock window → a block count on its OWN chain,
+  // so the real-time ordering holds regardless of which coin is on which leg.
+  const { toSecs, fromSecs } = htlcWindows(toLeg, ct.confs);
   const lock = { qbit: qh, btc: bh };
-  lock[fromLeg] += locktimeBlocks(fromLeg, HTLC_FROM_SECS);
-  lock[toLeg] += locktimeBlocks(toLeg, HTLC_TO_SECS);
+  lock[fromLeg] += locktimeBlocks(fromLeg, fromSecs);
+  lock[toLeg] += locktimeBlocks(toLeg, toSecs);
   s.locktimes = lock;
 
   // Per leg: claim party + refund party. On fromLeg, participant claims (with public secret) &
@@ -170,12 +216,6 @@ async function deriveHtlcs(s) {
     ? { leaf: hex(script), spk: hex(p2mrSpk(script)), address: p2mrAddress(script, HRP.qbit) }
     : { witnessScript: hex(script), spk: hex(p2wshSpk(script)), address: p2wshAddr(script, HRP.btc) };
   s.htlc = { [fromLeg]: pack(fromLeg, fromScript), [toLeg]: pack(toLeg, toScript) };
-
-  // Reorg-safe gate on the leg the initiator claims (toLeg). Qbit has the native engine; for a BTC
-  // toLeg use a simple depth by security level.
-  if (toLeg === "qbit") s.confsTarget = await qbit.confTarget(s.terms.qbtSats, s.terms.securityLevel);
-  else s.confsTarget = { confs: ({ maximum: 6, high: 3, medium: 2, low: 1 })[s.terms.securityLevel] ?? 3, source: "btc-depth", level: s.terms.securityLevel };
-  if (process.env.DEV_CONFS_CAP) s.confsTarget.confs = Math.min(s.confsTarget.confs, Number(process.env.DEV_CONFS_CAP));
   s.state = "READY";
 }
 
