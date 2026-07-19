@@ -125,14 +125,29 @@ async function init() {
   stepWelcome();
 }
 
-// Landing page — the first thing a new visitor sees.
+// Qbit orbit emblem — the brand mark with its dot + ring as a spinning "orbit" group around the core.
+const EMBLEM_SVG = `<svg viewBox="0 0 320 320" aria-hidden="true"><path class="core" d="m159.745 75.5137c46.2 0 83.652 37.4503 83.652 83.6483 0 46.197-37.452 83.648-83.652 83.648-46.199 0-83.6516-37.451-83.6516-83.648 0-46.198 37.4526-83.6483 83.6516-83.6483z"/><g class="orbit"><path d="m264.882 234.338c16.044 0 29.049 13.005 29.049 29.048 0 16.042-13.005 29.048-29.049 29.048-16.043 0-29.049-13.006-29.049-29.048 0-16.043 13.006-29.048 29.049-29.048z"/><path d="m46.1611 46.159c62.0959-62.0934 163.4069-61.4602 226.2849 1.4142 41.915 41.9136 56.167 100.9048 42.618 153.9748l-.026-.007c-1.478 5.001-6.104 8.652-11.584 8.652-6.672-.001-12.081-5.409-12.081-12.081 0-1.328.217-2.605.613-3.8 11.713-45.226-.14-95.2914-35.565-130.715-53.246-53.2434-139.575-53.2434-192.821 0-53.2456 53.243-53.2452 139.568.0007 192.812 35.4457 35.444 85.5513 47.29 130.7993 35.543 1.17-.377 2.416-.582 3.711-.582 6.672 0 12.081 5.408 12.081 12.08 0 5.477-3.645 10.099-8.642 11.58l.006.02c-53.071 13.548-112.0653-.704-153.9806-42.617-62.8774-62.874-63.5106-164.181-1.4143-226.274z"/></g></svg>`;
+
+// Landing page — hero + call-to-action + value props.
 function stepWelcome() {
   rerender = stepWelcome;
-  render(screen({
-    title: t("welcomeTitle"),
-    body: [h("p", { class: "note" }, t("welcomeBody"))],
-    cta: t("continue"), onCta: () => stepChoose(),
-  }));
+  const feature = (n) => h("div", { class: "feature" },
+    h("div", { class: "flabel" }, h("span", { class: "fdot" }), t("feat" + n)),
+    h("p", {}, t("feat" + n + "d")));
+  render(h("div", { class: "landing" },
+    h("section", { class: "hero" },
+      h("div", { class: "hero-emblem", html: EMBLEM_SVG }),
+      h("div", { class: "hero-kicker" }, t("heroKicker")),
+      h("h1", {}, t("heroTitle")),
+      h("p", { class: "hero-sub" }, t("heroSub")),
+      h("div", { class: "hero-cta" },
+        h("button", { class: "primary btn-lg", onclick: () => stepChoose() }, t("heroStart")),
+        h("button", { class: "btn-lg btn-ghost", onclick: () => stepInfo() }, t("heroLearn"))),
+    ),
+    h("section", { class: "features" },
+      h("h2", {}, t("featTitle")),
+      h("div", { class: "feature-grid" }, feature(1), feature(2), feature(3), feature(4), feature(5), feature(6))),
+  ));
 }
 
 // Direction chooser + resume/recover.
