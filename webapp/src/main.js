@@ -230,19 +230,69 @@ function stepConfirm() {
       h("p", { class: "note", style: "margin-top:2px" }, t("confirmP1b")),
       h("p", { class: "note" }, t("confirmP2")),
       h("p", { class: "note" }, t("confirmP3")),
+      h("p", { class: "note" }, t("confirmDiscordPre"),
+        h("a", { href: "https://discord.gg/xqC7MAk95Q", target: "_blank", rel: "noopener" }, t("confirmDiscordLink")),
+        t("confirmDiscordPost")),
     ],
     cta: t("confirmCta"), onCta: () => stepAmount(), back: () => (ORDERBOOK ? showMarket(flow.direction) : init()),
   }));
 }
+
+// BTC/USD from CoinGecko, cached ~2 min (for the optional price helper on the amounts step).
+let _btcUsd = { v: 0, at: 0 };
+async function btcUsdPrice() {
+  if (_btcUsd.v && Date.now() - _btcUsd.at < 120000) return _btcUsd.v;
+  try {
+    const r = await fetch("https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd");
+    const v = (await r.json())?.bitcoin?.usd;
+    if (v > 0) _btcUsd = { v, at: Date.now() };
+  } catch { /* offline / rate-limited → $ mode just stays blank; ₿ mode still works */ }
+  return _btcUsd.v;
+}
+let priceMode = "usd";   // "usd" | "btc", persists across re-renders
 
 function stepAmount() {
   rerender = stepAmount;
   const { send, recv } = roleCoins();
   const sendIn = field(t("amountPlaceholder", { coin: send }), coinSats(send) ? sats(coinSats(send)) : "");
   const recvIn = field(t("amountPlaceholder", { coin: recv }), coinSats(recv) ? sats(coinSats(recv)) : "");
+  const btcIn = send === "BTC" ? sendIn : recvIn;   // which input holds BTC / QBT (direction-independent)
+  const qbtIn = send === "BTC" ? recvIn : sendIn;
+
+  // Price helper: shows $ (or ₿) per QBT, kept in sync with the amounts. Editing it adjusts the BTC
+  // amount so the price matches (QBT fixed). A toggle switches the unit; BTCUSD is the cached CoinGecko rate.
+  const unitKey = () => (priceMode === "usd" ? "priceUsd" : "priceBtc");
+  const priceIn = field(t(unitKey()));
+  const unitBtn = h("button", { type: "button", class: "copy", onclick: () => { priceMode = priceMode === "usd" ? "btc" : "usd"; unitBtn.textContent = t(unitKey()); priceIn.placeholder = t(unitKey()); syncPrice(); } }, t(unitKey()));
+  const num = (el) => { const n = parseFloat(el.value); return isFinite(n) && n > 0 ? n : 0; };
+  const trim = (n) => n.toFixed(8).replace(/0+$/, "").replace(/\.$/, "");
+  let usd = 0;
+  function syncPrice() {            // amounts → price field
+    const b = num(btcIn), q = num(qbtIn);
+    if (!b || !q) { priceIn.value = ""; return; }
+    const btcPerQbt = b / q;
+    priceIn.value = priceMode === "usd" ? (usd ? (btcPerQbt * usd).toFixed(4) : "") : trim(btcPerQbt);
+  }
+  function applyPrice() {           // price field → BTC amount (QBT fixed)
+    const p = num(priceIn), q = num(qbtIn);
+    if (!p || !q) return;
+    const btcPerQbt = priceMode === "usd" ? (usd ? p / usd : 0) : p;
+    if (btcPerQbt) btcIn.value = trim(btcPerQbt * q);
+  }
+  sendIn.oninput = recvIn.oninput = syncPrice;
+  priceIn.oninput = applyPrice;
+  btcUsdPrice().then((u) => { usd = u; if (priceMode === "usd") syncPrice(); });
+  syncPrice();
+
   render(screen({
     title: t("howMuch"),
-    body: [h("label", {}, t("youSendCoin", { coin: send })), sendIn, h("label", {}, t("youReceiveCoin", { coin: recv })), recvIn],
+    body: [
+      h("label", {}, t("youSendCoin", { coin: send })), sendIn,
+      h("label", {}, t("youReceiveCoin", { coin: recv })), recvIn,
+      h("div", { style: "display:flex;justify-content:space-between;align-items:center;gap:10px;margin:14px 0 5px" },
+        h("span", { style: "font-size:12.5px;font-weight:550;color:var(--mut)" }, t("priceLabel")), unitBtn),
+      priceIn,
+    ],
     cta: t("continue"),
     onCta: () => {
       flow[send === "BTC" ? "btcSats" : "qbtSats"] = toSats(sendIn.value);

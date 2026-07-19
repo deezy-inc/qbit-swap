@@ -24,8 +24,10 @@ const en = {
   confirmP3: "It can take up to about an hour to confirm on both chains. Keep this tab open until it finishes — and save the backup file so you can resume or get a refund if you close it.",
   confirmCta: "I've agreed a trade with a counterparty — continue",
   // amount
-  howMuch: "How much?", youSendCoin: "You send ({coin})", youReceiveCoin: "You receive ({coin})",
+  howMuch: "Enter the trade amounts", youSendCoin: "You send ({coin})", youReceiveCoin: "You receive ({coin})",
   amountPlaceholder: "amount in {coin}",
+  confirmDiscordPre: "You can try finding a trading partner in the ", confirmDiscordLink: "Qbit Discord", confirmDiscordPost: ".",
+  priceLabel: "Price", priceUsd: "$ per QBT", priceBtc: "₿ per QBT",
   // receive / refund
   receiveTitle: "Where would you like to receive your {coin}?",
   receiveSub: "Your counterparty's {coin} is released to this address when the swap completes.",
@@ -117,8 +119,10 @@ const zh = {
   confirmP2: "双方锁定资金后，兑换将原子性结算：要么双方都完成，要么双方都拿回各自的资金。任何一方都无法被欺骗。",
   confirmP3: "两条链上的确认最长可能需要约一小时。请保持此标签页开启直到完成——并保存备份文件，以便关闭后仍能继续或退款。",
   confirmCta: "我已与对手方达成交易——继续",
-  howMuch: "兑换多少？", youSendCoin: "您发送（{coin}）", youReceiveCoin: "您接收（{coin}）",
+  howMuch: "输入交易金额", youSendCoin: "您发送（{coin}）", youReceiveCoin: "您接收（{coin}）",
   amountPlaceholder: "{coin} 数量",
+  confirmDiscordPre: "您可以尝试在 ", confirmDiscordLink: "Qbit Discord", confirmDiscordPost: " 中寻找交易伙伴。",
+  priceLabel: "价格", priceUsd: "$ / QBT", priceBtc: "₿ / QBT",
   receiveTitle: "您希望在哪里接收您的 {coin}？",
   receiveSub: "兑换完成时，对手方的 {coin} 将发送到此地址。",
   receivePlaceholder: "您的 {coin} 接收地址",
