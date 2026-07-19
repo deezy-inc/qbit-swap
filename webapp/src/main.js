@@ -309,20 +309,16 @@ function stepBackup(next) {
 const linkBox = () => h("div", { class: "mono", style: "background:var(--panel2);padding:10px;border-radius:8px" }, flow.bobLink);
 function stepShare() {
   rerender = stepShare;
+  // Copy reveals the Continue button (which goes straight live) — no intermediate confirm slide.
+  const cont = h("button", { class: "primary", style: "width:100%;margin-top:12px;display:none", onclick: () => startLive() }, t("continue"));
+  const copyBtn = h("button", { class: "primary", style: "width:100%;margin-top:16px", onclick: async () => {
+    try { await navigator.clipboard?.writeText(flow.bobLink); } catch {}
+    copyBtn.textContent = t("copiedCheck");
+    cont.style.display = "block";
+  } }, t("copyLink"));
   render(screen({
     title: t("shareTitle"), subtitle: t("shareSub"),
-    body: [linkBox()],
-    cta: t("copyLink"),
-    onCta: async () => { try { await navigator.clipboard?.writeText(flow.bobLink); } catch {} stepShareConfirm(); },
-  }));
-}
-function stepShareConfirm() {
-  rerender = stepShareConfirm;
-  render(screen({
-    title: t("shareConfirmTitle"), subtitle: t("shareConfirmBody"),
-    body: [linkBox()],
-    cta: t("shareConfirmCta"), onCta: () => startLive(),
-    back: () => stepShare(),
+    body: [linkBox(), copyBtn, cont],
   }));
 }
 
