@@ -21,7 +21,7 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const PUBLIC_URL = (process.env.PUBLIC_URL || "http://127.0.0.1:8080").replace(/\/$/, "");
 const WEB = Number(process.env.WEB_PORT || 8080), COORD = Number(process.env.COORD_PORT || 8787);
 const BIND = process.env.WEB_BIND || "127.0.0.1"; // the tunnel connects on loopback; no public bind needed
-const MIME = { ".html": "text/html", ".js": "text/javascript", ".mjs": "text/javascript", ".json": "application/json", ".css": "text/css", ".ico": "image/x-icon", ".svg": "image/svg+xml", ".wasm": "application/wasm" };
+const MIME = { ".html": "text/html", ".js": "text/javascript", ".mjs": "text/javascript", ".json": "application/json", ".css": "text/css", ".ico": "image/x-icon", ".svg": "image/svg+xml", ".wasm": "application/wasm", ".png": "image/png", ".jpg": "image/jpeg" };
 
 // Address HRPS the app enforces per network (see client/addr.js). A wrong-network address is
 // rejected client-side before any funds move.

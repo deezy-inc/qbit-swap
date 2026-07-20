@@ -1,7 +1,6 @@
 // Minimal i18n: a flat key→string dictionary per language, with {name} interpolation. Currency
 // tickers (BTC/QBT) and amounts are never translated. Language persists in localStorage.
 const en = {
-  tagline: "non-custodial atomic BTC ⇄ QBT · keys stay in your browser",
   back: "← Back", continue: "Continue",
   // landing
   swapWhichWay: "Which way do you want to swap?",
@@ -24,8 +23,6 @@ const en = {
   confirmP3: "It can take up to about an hour to confirm on both chains. Keep this tab open until it finishes — and save the backup file so you can resume or get a refund if you close it.",
   confirmCta: "I've found a trading partner and we've agreed to a price quote",
   // amount
-  welcomeTitle: "QBT Trustless OTC Trade Coordinator",
-  welcomeBody: "Use this tool to execute a QBT/BTC trade with someone. You must find a counterparty and agree to a price and amount, and this tool helps you execute a trustless cross-chain atomic swap.",
   heroKicker: "QBT/BTC OTC",
   heroTitle: "Onchain atomic swaps between Bitcoin and Qbit",
   heroSub: "Find a counterparty and agree on a price, then settle a peer-to-peer cross-chain atomic swap. Non-custodial — send from any wallet, and this tool never touches your funds.",
@@ -98,7 +95,6 @@ const en = {
   tradesEmpty: "No settled trades yet.", tradesWhen: "When",
   // receive / refund
   receiveTitle: "Where would you like to receive your {coin}?",
-  receiveSub: "Your counterparty's {coin} is released to this address when the swap completes.",
   receivePlaceholder: "your {coin} receiving address",
   feeNote: "A small network fee is deducted from the amount you receive, so you'll get slightly less than the quoted amount.",
   refundTitle: "If the swap is cancelled, where would you like your {coin} returned?",
@@ -114,9 +110,6 @@ const en = {
   shareTitle: "Send this link to your counterparty",
   shareSub: "They open it to take the other side. Share it only with them.",
   copyLink: "Copy link",
-  shareConfirmTitle: "Share the link with your counterparty",
-  shareConfirmBody: "Make sure your counterparty has the link and is opening it. When they join, you'll both lock your funds.",
-  shareConfirmCta: "I have shared the link with my counterparty",
   // invited
   invitedTitle: "You've been invited to a swap",
   invitedSub: "A peer-to-peer atomic swap — you trade directly with your counterparty, not with us.",
@@ -150,8 +143,8 @@ const en = {
   errBadAddr: "That doesn't look like a valid {coin} address — double-check it's a {coin} address on the right network.",
   errReadBackup: "Could not read backup: {msg}", errRestore: "Could not restore: {msg}",
   // order book
-  orderBook: "Order book", buyQbt: "Buy QBT", sellQbt: "Sell QBT",
-  colLot: "Lot", colPrice: "Price", colTotal: "Total", buyBtn: "Buy", sellBtn: "Sell",
+  buyQbt: "Buy QBT", sellQbt: "Sell QBT",
+  colPrice: "Price", colTotal: "Total", buyBtn: "Buy", sellBtn: "Sell",
   noOffers: "No open offers right now — check back soon, or start your own swap below.",
   refreshBook: "Refresh", startOwn: "Or start your own peer-to-peer swap", tradePeer: "Trade directly with a peer",
   buyingSummary: "You buy {qbt} QBT for {btc} BTC", sellingSummary: "You sell {qbt} QBT for {btc} BTC",
@@ -167,7 +160,6 @@ const en = {
   securityErr: "⚠ Security check failed — the swap's addresses don't match your keys. Do NOT send any funds. Refresh the page or start over.",
 };
 const zh = {
-  tagline: "非托管原子兑换 BTC ⇄ QBT · 密钥保存在您的浏览器中",
   back: "← 返回", continue: "继续",
   swapWhichWay: "您想如何兑换？",
   nonCustodial: "此应用在您与另一方之间协调一次非托管的原子兑换。",
@@ -187,8 +179,6 @@ const zh = {
   confirmP2: "双方锁定资金后，兑换将原子性结算：要么双方都完成，要么双方都拿回各自的资金。对手方无法欺骗您。",
   confirmP3: "两条链上的确认最长可能需要约一小时。请保持此标签页开启直到完成——并保存备份文件，以便关闭后仍能继续或退款。",
   confirmCta: "我已找到交易伙伴，我们已商定报价",
-  welcomeTitle: "QBT 无需信任 OTC 交易协调器",
-  welcomeBody: "使用此工具与他人执行 QBT/BTC 交易。您需要自行找到对手方并商定价格和数量，本工具帮助您完成无需信任的跨链原子兑换。",
   heroKicker: "QBT/BTC 场外交易",
   heroTitle: "比特币与 Qbit 之间的链上原子兑换",
   heroSub: "找到对手方并商定价格，即可完成点对点的跨链原子兑换。非托管——从任意钱包发送，本工具绝不接触您的资金。",
@@ -259,7 +249,6 @@ const zh = {
   tradesNote: "近期完成的兑换——仅显示金额和价格。",
   tradesEmpty: "暂无已结算的成交。", tradesWhen: "时间",
   receiveTitle: "您希望在哪里接收您的 {coin}？",
-  receiveSub: "兑换完成时，对手方的 {coin} 将发送到此地址。",
   receivePlaceholder: "您的 {coin} 接收地址",
   feeNote: "接收金额会扣除少量网络手续费，因此您实际收到的会略少于报价金额。",
   refundTitle: "如果兑换取消，您希望将您的 {coin} 退回到哪里？",
@@ -274,9 +263,6 @@ const zh = {
   shareTitle: "将此链接发送给您的对手方",
   shareSub: "对方打开它即可接手另一侧。请仅与对方分享。",
   copyLink: "复制链接",
-  shareConfirmTitle: "将链接分享给您的对手方",
-  shareConfirmBody: "请确保您的对手方已获得链接并正在打开。对方加入后，你们将各自锁定资金。",
-  shareConfirmCta: "我已将链接分享给我的对手方",
   invitedTitle: "您被邀请进行一次兑换",
   invitedSub: "点对点原子兑换——您直接与对手方交易，而非与我们。",
   youSend: "您发送", youReceive: "您接收",
@@ -308,8 +294,8 @@ const zh = {
   errBadAddr: "这看起来不是有效的 {coin} 地址——请确认它是正确网络上的 {coin} 地址。",
   errReadBackup: "无法读取备份：{msg}", errRestore: "无法恢复：{msg}",
   // order book
-  orderBook: "订单簿", buyQbt: "买入 QBT", sellQbt: "卖出 QBT",
-  colLot: "数量", colPrice: "价格", colTotal: "总额", buyBtn: "买入", sellBtn: "卖出",
+  buyQbt: "买入 QBT", sellQbt: "卖出 QBT",
+  colPrice: "价格", colTotal: "总额", buyBtn: "买入", sellBtn: "卖出",
   noOffers: "暂无挂单——请稍后再来，或在下方发起您自己的兑换。",
   refreshBook: "刷新", startOwn: "或发起您自己的点对点兑换", tradePeer: "直接与对手方交易",
   buyingSummary: "您用 {btc} BTC 买入 {qbt} QBT", sellingSummary: "您卖出 {qbt} QBT 换取 {btc} BTC",
