@@ -544,6 +544,17 @@ function stepShare() {
 }
 
 // ── participant entry (opened via link) ───────────────────────────────────────
+// While the participant is filling in their details (pre-join, no swap client yet), ping the coordinator
+// so it keeps seeing them as online — otherwise their presence expires and the creator sees "offline"
+// even though they're actively entering info. The live client's SSE takes over once they join.
+function startJoinHeartbeat(coordinator, id, token) {
+  stopJoinHeartbeat();
+  const ping = () => fetch(`${coordinator}/swaps/${id}`, { headers: { "x-swap-token": token } }).catch(() => {});
+  ping();
+  flow._joinHeartbeat = setInterval(ping, 8000);   // < the coordinator's 15s presence window
+}
+function stopJoinHeartbeat() { if (flow._joinHeartbeat) { clearInterval(flow._joinHeartbeat); flow._joinHeartbeat = null; } }
+
 async function startParticipant({ coordinator, id, token }) {
   flow.mode = "join"; flow.coordinator = coordinator; flow.joinId = id; flow.joinToken = token;
   render(screen({ title: t("loadingSwap"), body: [h("span", { class: "muted" }, t("fetchingTerms"))] }));
@@ -552,6 +563,7 @@ async function startParticipant({ coordinator, id, token }) {
     markScreen(null);
     return render(screen({ title: t("swapCanceled"), body: [h("p", { class: "note" }, v.canceled?.byYou ? t("cancelByYou") : t("cancelByCp"))] }));
   }
+  startJoinHeartbeat(coordinator, id, token);   // keep presence alive through the entering-info screens
   flow.direction = v.direction; flow.btcSats = v.terms.btcSats; flow.qbtSats = v.terms.qbtSats;
   flow.feerates = v.feerates;
   stepInvited();
@@ -575,6 +587,7 @@ function stepInvited() {
 // ── live: fund + progress (one screen that morphs) ────────────────────────────
 let liveCard = null;
 function startLive() {
+  stopJoinHeartbeat();   // the live client's SSE now maintains presence
   flow.client.stop();   // idempotent: safe if we came back from the share screen and re-enter
   liveCard = h("div", { class: "card" }, h("span", { class: "muted" }, "…"));
   render(liveCard);
@@ -587,6 +600,18 @@ const STATE_CLASS = { COMPLETE: "good", REFUNDED: "warn", CLAIMABLE: "info", CLA
 // Public block explorers for the tx links in the timeline.
 const EXPLORER = { btc: "https://mempool.space/tx/", qbit: "https://qbitmempool.robertclarke.com/tx/" };
 const txLink = (leg, txid) => h("a", { href: EXPLORER[leg] + txid, target: "_blank", rel: "noopener" }, shorten(txid, 8));
+// Confirmation progress under a deposit: "X / Y confirmations · ~Zm" for the reorg-safe-gated leg,
+// or just "X confirmations" for the other. ETA uses average mainnet block times.
+const AVG_BLOCK = { btc: 600, qbit: 60 };
+const etaCompact = (secs) => secs <= 0 ? "" : secs < 60 ? " · <1m" : secs < 3600 ? ` · ~${Math.round(secs / 60)}m` : ` · ~${Math.round(secs / 3600 * 10) / 10}h`;
+function confSub(v, leg, fund) {
+  if (!fund || fund.unconfirmed || fund.height == null) return null;
+  const confs = Math.max(0, (v.heights?.[leg] || 0) - fund.height + 1);
+  const target = v.confsTarget?.confs || 0;
+  if (!(leg === v.roles?.toLeg && target > 0)) return t("confCount", { confs });
+  const remaining = Math.max(0, target - confs);
+  return t("confLine", { confs, target }) + (remaining > 0 ? etaCompact(remaining * (AVG_BLOCK[leg] || 60)) : "");
+}
 
 // A persistent progress timeline for the swap: every step stays visible (matched → you sent →
 // counterparty sent → you received / refunded), each with a checkmark and a link to the transaction
@@ -597,21 +622,23 @@ function swapTimeline(v, send, recv) {
   const myClaim = v.broadcasts?.[`${claimLeg}:claim`];      // the tx that delivers your received coin
   const myRefund = v.broadcasts?.[`${fundLeg}:refund`];     // your refund tx on abort
   const complete = v.state === "COMPLETE", refunded = v.state === "REFUNDED";
+  // Labels are tense-aware: future/present before a step happens, past once it's done.
   const steps = [
-    { label: t("tlMatched"), done: !!v.htlc },
-    { label: t("tlYouSent", { coin: send }), done: !!myFund, leg: fundLeg, txid: myFund?.txid, mem: myFund?.unconfirmed },
-    { label: t("tlCpSent", { coin: recv }), done: !!cpFund, leg: claimLeg, txid: cpFund?.txid, mem: cpFund?.unconfirmed },
+    { label: () => t("tlMatched"), done: !!v.htlc },
+    { label: (d) => t(d ? "tlYouSent" : "tlYouSend", { coin: send }), done: !!myFund, leg: fundLeg, txid: myFund?.txid, mem: myFund?.unconfirmed, fund: myFund },
+    { label: (d) => t(d ? "tlCpSent" : "tlCpSend", { coin: recv }), done: !!cpFund, leg: claimLeg, txid: cpFund?.txid, mem: cpFund?.unconfirmed, fund: cpFund },
   ];
-  if (refunded) steps.push({ label: t("tlRefunded", { coin: send }), done: !!myRefund, leg: fundLeg, txid: myRefund });
-  else steps.push({ label: t("tlYouReceived", { coin: recv }), done: complete || !!myClaim, leg: claimLeg, txid: myClaim });
+  if (refunded) steps.push({ label: () => t("tlRefunded", { coin: send }), done: !!myRefund, leg: fundLeg, txid: myRefund });
+  else steps.push({ label: (d) => t(d ? "tlYouReceived" : "tlYouReceive", { coin: recv }), done: complete || !!myClaim, leg: claimLeg, txid: myClaim });
   let activeSet = false;
   return h("div", { class: "timeline" }, ...steps.map((s) => {
     const state = s.done ? "done" : (!activeSet && (activeSet = true) ? "active" : "todo");
     return h("div", { class: "tl-step " + state },
-      h("span", { class: "tl-icon " + state }, s.done ? "✓" : (state === "active" ? "●" : "○")),
+      h("span", { class: "tl-icon " + state }, s.done ? "✓" : ""),   // upcoming steps: a hollow ring (the border), no inner dot
       h("div", { class: "tl-body" },
-        h("span", { class: "tl-label" }, s.label),
-        s.txid ? h("span", { class: "tl-tx" }, s.mem ? h("span", { class: "tl-mem" }, t("tlMempool") + " · ") : null, txLink(s.leg, s.txid)) : null));
+        h("span", { class: "tl-label" }, s.label(s.done)),
+        s.txid ? h("span", { class: "tl-tx" }, s.mem ? h("span", { class: "tl-mem" }, t("tlMempool") + " · ") : null, txLink(s.leg, s.txid)) : null,
+        s.fund ? ((c) => c ? h("span", { class: "tl-conf" }, c) : null)(confSub(v, s.leg, s.fund)) : null));
   }));
 }
 
@@ -630,7 +657,7 @@ function renderLive(card, v) {
   const headline = canceled ? t("swapCanceled")
     : v.state === "COMPLETE" ? t("swapComplete") : v.state === "REFUNDED" ? t("swapRefunded")
     : !addr ? t("waitingCounterparty")
-    : funded ? t("coinLocked", { coin: send }) : t("sendToLock", { coin: send });
+    : funded ? t(funded.unconfirmed ? "coinPending" : "coinLocked", { coin: send }) : t("sendToLock", { coin: send });
   card.append(h("div", { style: "display:flex;justify-content:space-between;align-items:center" },
     h("h2", { style: "margin:0" }, headline),
     h("span", { class: "badge " + (STATE_CLASS[v.state] || "") }, v.state)));
@@ -653,10 +680,11 @@ function renderLive(card, v) {
   if (v.securityError) { liveGuard = { risky: false }; card.append(h("p", { class: "note", style: "color:var(--bad);font-weight:600;margin-top:12px" }, t("securityErr"))); return; }
 
   if (!terminal) {
-    const online = v.counterpartyOnline;
+    // Three states: offline · online but still entering their details (present, no party data yet) · fully joined.
+    const online = v.counterpartyOnline, joined = !!v.counterparty;
     card.append(h("div", { class: "note statusline", style: "margin-top:8px" },
       h("span", { class: `dot ${online ? "live" : "idle"}` }),
-      online ? t("cpOnline") : t("cpOffline")));
+      !online ? t("cpOffline") : joined ? t("cpOnline") : t("cpEntering")));
   }
   // Safety net: once both legs are funded, the client pre-signs a fee-ladder claim + refund and the
   // coordinator (watchtower) finishes even if this tab closes. Until armed, warn against leaving.
@@ -688,7 +716,7 @@ function renderLive(card, v) {
 
   if (!terminal && addr) {
     card.append(h("div", { class: "fund" },
-      h("div", { class: "muted" }, funded ? t("coinLockedCheck", { coin: send }) : t("sendExactly", { coin: send })),
+      h("div", { class: "muted" }, funded ? t(funded.unconfirmed ? "coinPendingCheck" : "coinLockedCheck", { coin: send }) : t("sendExactly", { coin: send })),
       h("div", { class: "amt" }, `${sats(coinSats(send))} ${send}`),
       funded ? null : h("div", { class: "mono", style: "margin-top:6px" }, addr),
       funded ? null : h("div", { class: "btns" }, copyButton("copyAddress", "copiedCheck", () => addr))));
@@ -757,7 +785,7 @@ function renderChrome() {
 
 // Clicking the Qbit logo clears the current flow and returns to the home screen.
 function goHome() {
-  flow.client?.stop?.();
+  flow.client?.stop?.(); stopJoinHeartbeat();
   Object.assign(flow, { mode: null, direction: null, btcSats: 0, qbtSats: 0, receiveAddr: "", refundAddr: "", client: null, bobLink: null, _recoverySaved: false });
   liveGuard = { risky: false };
   if (location.hash) history.replaceState(null, "", location.pathname + location.search);
