@@ -38,6 +38,23 @@ const cfg = [
 ].join("");
 const CONFIG = `<script>${cfg}</script>`;
 
+// Swap the English link-preview strings for 中文 (ordered longest-first so shared prefixes don't clash),
+// point the preview image at the zh card, and tag the locale. Applied only to ?lang=zh requests.
+function localizeOgZh(html) {
+  const subs = [
+    ["Non-custodial, peer-to-peer atomic swaps between Bitcoin and Qbit. Send from any wallet; the coordinator never holds your funds.",
+     "比特币与 Qbit 之间的非托管、点对点原子兑换。从任意钱包发送；协调器绝不持有您的资金。"],
+    ["Non-custodial, peer-to-peer atomic swaps between Bitcoin and Qbit. Trade directly with a counterparty on-chain — send from any wallet.",
+     "比特币与 Qbit 之间的非托管、点对点原子兑换。直接与对手方在链上交易——从任意钱包发送。"],
+    ["Non-custodial, peer-to-peer atomic swaps between Bitcoin and Qbit.",
+     "比特币与 Qbit 之间的非托管、点对点原子兑换。"],
+    ["Qbit Swap — Onchain atomic swaps between Bitcoin and Qbit", "Qbit Swap — 比特币与 Qbit 之间的链上原子兑换"],
+    ["/og.png", "/og-zh.png"],
+  ];
+  for (const [en, zh] of subs) html = html.split(en).join(zh);
+  return html.replace('<meta property="og:type" content="website" />', '<meta property="og:type" content="website" />\n<meta property="og:locale" content="zh_CN" />');
+}
+
 function proxy(req, res, port, path) {
   const up = http.request({ host: "127.0.0.1", port, method: req.method, path, headers: { ...req.headers, host: `127.0.0.1:${port}` } }, (r) => { res.writeHead(r.statusCode, r.headers); r.pipe(res); });
   up.on("error", () => { if (!res.headersSent) res.writeHead(502); res.end("proxy error"); });
@@ -54,7 +71,13 @@ function unified() {
         const file = join(ROOT, rel === "/" ? "/index.html" : rel);
         if (!file.startsWith(ROOT)) { res.writeHead(403); return res.end(); }
         let body = await readFile(file);
-        if (file.endsWith("index.html")) body = Buffer.from(body.toString().replace("</head>", `${CONFIG}\n</head>`));
+        if (file.endsWith("index.html")) {
+          let html = body.toString().replace("</head>", `${CONFIG}\n</head>`);
+          // Localize the link-preview (OG/Twitter) tags for ?lang=zh. Scrapers fetch the exact shared
+          // URL, and zh users' shared links carry ?lang=zh — so the zh and en previews never collide.
+          if (new URLSearchParams(path.split("?")[1] || "").get("lang") === "zh") html = localizeOgZh(html);
+          body = Buffer.from(html);
+        }
         // No hashed asset names yet, so tell the browser to revalidate — otherwise a deploy's new
         // dist/app.js stays invisible behind the cached copy until a hard refresh.
         res.writeHead(200, { "content-type": MIME[extname(file)] || "application/octet-stream", "cache-control": "no-cache" }); res.end(body);
