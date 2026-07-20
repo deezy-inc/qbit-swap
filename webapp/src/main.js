@@ -182,6 +182,10 @@ function stepWelcome() {
           h("a", { href: "https://discord.gg/xqC7MAk95Q", target: "_blank", rel: "noopener" }, t("confirmDiscordLink")),
           t("step1dPost"))),
         stepRow(2), stepRow(3), stepRow(4), stepRow(5), stepRow(6), stepRow(7))),
+    h("section", { class: "about" },
+      h("h2", {}, t("aboutQbitTitle")),
+      h("p", { class: "about-body" }, t("aboutQbitBody"), " ",
+        h("a", { href: "https://qbit.org/", target: "_blank", rel: "noopener" }, "qbit.org"))),
   ));
 }
 const stepRow = (n, detail) => h("div", { class: "step" },
