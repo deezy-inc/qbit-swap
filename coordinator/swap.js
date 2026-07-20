@@ -110,7 +110,8 @@ const locktimeBlocks = (leg, secs) => Math.max(1, Math.ceil(secs / BLOCK_SECS[le
 // BTC value by REORG_MARGIN×. Timelocks are then derived from the resulting confirmation count, so a
 // small swap settles + refunds fast while a large one gets deeper confirmations and longer windows.
 const REORG_MARGIN = Number(process.env.REORG_MARGIN || 3);                 // cost-to-reorg ≥ this × swap value
-const MIN_CONFS = { btc: Number(process.env.MIN_CONFS_BTC || 1), qbit: Number(process.env.MIN_CONFS_QBIT || 6) };
+const MIN_CONFS = { btc: Number(process.env.MIN_CONFS_BTC || 1), qbit: Number(process.env.MIN_CONFS_QBIT || 1) };   // never 0-conf, but otherwise let the value-scaled math decide
+const UNPRICED_CONFS = Number(process.env.UNPRICED_CONFS || 6);   // conservative fallback when the reorg cost can't be priced (node model unavailable)
 const TO_MULT = Number(process.env.HTLC_TO_MULT || 2);                      // claim window ≈ maturity × this + base
 const TO_BASE_SECS = Number(process.env.HTLC_TO_BASE_SECS || 3600);         // + slack to fund + detect (1h)
 const FROM_GAP_SECS = Number(process.env.HTLC_FROM_GAP_SECS || 3600);       // participant's claim window after the reveal
@@ -130,8 +131,8 @@ async function reorgConfs(toLeg, btcSats, qbtSats, level, btcHeight) {
   } else {
     costPerConf = btcSub;                                                   // reorging one BTC block ≈ one BTC subsidy of work
   }
-  const need = costPerConf > 0 ? Math.ceil((REORG_MARGIN * btcSats) / costPerConf) : MIN_CONFS[toLeg];
-  return { confs: Math.max(MIN_CONFS[toLeg], need), source: toLeg === "qbit" ? "reorg-cost" : "btc-depth", level, valueBtcSats: btcSats, costPerConfSats: Math.round(costPerConf), ...extra };
+  const need = costPerConf > 0 ? Math.max(MIN_CONFS[toLeg], Math.ceil((REORG_MARGIN * btcSats) / costPerConf)) : UNPRICED_CONFS;
+  return { confs: need, source: toLeg === "qbit" ? "reorg-cost" : "btc-depth", level, valueBtcSats: btcSats, costPerConfSats: Math.round(costPerConf), ...extra };
 }
 
 // Wall-clock timelock windows derived from the gate's maturity (or forced fixed via env, for regtest).
