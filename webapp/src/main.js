@@ -215,6 +215,10 @@ function stepInfo() {
   const faq = (q, a) => h("div", { style: "margin-top:16px" },
     h("div", { style: "font-weight:600;color:var(--ink)" }, t(q)),
     h("p", { class: "note", style: "margin-top:3px" }, t(a)));
+  const faqLink = (q, a, href, linkText) => h("div", { style: "margin-top:16px" },
+    h("div", { style: "font-weight:600;color:var(--ink)" }, t(q)),
+    h("p", { class: "note", style: "margin-top:3px" }, t(a), " ",
+      h("a", { href, target: "_blank", rel: "noopener", style: "color:var(--accent)" }, linkText)));
   const tech = (n) => h("div", { style: "margin-top:14px" },
     h("div", { style: "font-weight:600;color:var(--ink)" }, t("tech" + n + "l")),
     h("p", { class: "note", style: "margin-top:3px" }, t("tech" + n + "d")));
@@ -224,6 +228,7 @@ function stepInfo() {
       h("p", { class: "note" }, t("infoIntro")),
       step(1, "infoStep1"), step(2, "infoStep2"), step(3, "infoStep3"), step(4, "infoStep4"),
       h("h2", { style: "margin:24px 0 0" }, t("infoFaqTitle")),
+      faqLink("faqWhatQ", "faqWhatA", "https://qbit.org/", "qbit.org"),
       faq("faqCustodialQ", "faqCustodialA"), faq("faqStallQ", "faqStallA"), faq("faqHowLongQ", "faqHowLongA"),
       faq("faqFindQ", "faqFindA"), faq("faqFeesQ", "faqFeesA"), faq("faqWalletQ", "faqWalletA"), faq("faqBackupQ", "faqBackupA"),
       h("h2", { style: "margin:24px 0 0" }, t("techTitle")),
