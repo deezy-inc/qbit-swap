@@ -33,8 +33,8 @@ async function main() {
   // (no claim, no preimage revealed) while we probe the sweep txs by hand.
   const alice = new SwapClient({ coordinator: BASE });
   const bob = new SwapClient({ coordinator: BASE });
-  const { id, bobToken } = await alice.create({ direction: "btc2qbt", btcSats: 100000000, qbtSats: 500000000, securityLevel: "high", ...(await dests()) });
-  await bob.join({ id, token: bobToken, ...(await dests()) });
+  const { id, inviteToken } = await alice.create({ role: "alice", btcSats: 100000000, qbtSats: 500000000, securityLevel: "high", ...(await dests()) });
+  await bob.join({ id, token: inviteToken, ...(await dests()) });
 
   const view = async (c) => (await fetch(`${BASE}/swaps/${id}?token=${c.token}`)).json();
   let v; for (let i = 0; i < 60 && !(v = await view(alice)).htlc; i++) await sleep(500);

@@ -1,10 +1,11 @@
-// Browser-side swap party, BIDIRECTIONAL. Generates ephemeral per-swap keys, creates/joins a swap
-// through the coordinator's API, subscribes to its live feed, and signs its own claim/refund in-page
-// (WASM SLH-DSA for the Qbit leg, ECDSA for the Bitcoin leg). The coordinator is keyless.
+// Browser-side swap party. Generates ephemeral per-swap keys, creates/joins a swap through the
+// coordinator's API, subscribes to its live feed, and signs its own claim/refund in-page (WASM SLH-DSA
+// for the Qbit leg, ECDSA for the Bitcoin leg). The coordinator is keyless.
 //
-//   The CREATOR is the initiator (holds the secret): funds fromLeg (longer timelock), claims toLeg
-//   (revealing the preimage). The joiner is the participant: funds toLeg, claims fromLeg with the
-//   now-public preimage. `direction` ("btc2qbt"|"qbt2btc") sets which coin the initiator sends.
+//   The QBT BUYER is the initiator (alice, holds the secret): funds fromLeg=BTC (longer timelock),
+//   claims toLeg=QBT (revealing the preimage). The QBT SELLER is the participant (bob): funds QBT,
+//   claims BTC with the now-public preimage. This holds no matter who created the link — the creator
+//   simply keeps the alice (buyer) or bob (seller) token and shares the other. Every swap is btc2qbt.
 import { sha256 } from "@noble/hashes/sha2.js";
 import { bytesToHex as hex, hexToBytes as bin } from "@noble/hashes/utils.js";
 import {
@@ -44,10 +45,10 @@ export class SwapClient {
   }
 
   // ── identity / persistence ───────────────────────────────────────────────────
-  async #freshKeys(isCreator) {
+  async #freshKeys(isInitiator) {
     this.qbit = await slhDsaKeygen(rand(128));
     this.btcPriv = rand(32);
-    if (isCreator) { this.secret = rand(32); this.H = sha256(this.secret); }
+    if (isInitiator) { this.secret = rand(32); this.H = sha256(this.secret); }   // only the initiator (alice) holds the secret
   }
   secrets() {
     return {
@@ -69,22 +70,30 @@ export class SwapClient {
     return this;
   }
 
-  // ── create (initiator) / join (participant) ──────────────────────────────────
-  async create({ direction = "btc2qbt", btcSats, qbtSats, securityLevel = "high", btcDest, qbitDest }) {
-    this.role = "alice"; this.direction = direction; this.btcDest = btcDest; this.qbitDest = qbitDest;
+  // ── create / join ────────────────────────────────────────────────────────────
+  // `role` is the creator's OWN role: "alice" if the creator is BUYING QBT (initiator, sends BTC),
+  // "bob" if SELLING QBT (participant, sends QBT). Only the initiator holds the secret; the invite link
+  // hands the counterparty the other token. Every swap is btc2qbt under the hood.
+  async create({ role = "alice", btcSats, qbtSats, securityLevel = "high", btcDest, qbitDest }) {
+    this.role = role; this.direction = "btc2qbt"; this.btcDest = btcDest; this.qbitDest = qbitDest;
     this.terms = { btcSats, qbtSats };
-    await this.#freshKeys(true);
-    const { id, tokens } = await this.#api("/swaps", { method: "POST", body: { direction, btcSats, qbtSats, securityLevel } });
-    this.id = id; this.token = tokens.alice;
+    await this.#freshKeys(role === "alice");
+    const { id, tokens } = await this.#api("/swaps", { method: "POST", body: { btcSats, qbtSats, securityLevel } });
+    this.id = id; this.token = tokens[role];
     await this.#submit();
-    return { id, aliceToken: tokens.alice, bobToken: tokens.bob, bobLink: this.link(tokens.bob) };
+    const inviteToken = tokens[role === "alice" ? "bob" : "alice"];
+    return { id, myToken: this.token, inviteToken, inviteLink: this.link(inviteToken) };
   }
+  // Join from an invite link. We learn our role from the coordinator via our token — if we're the
+  // initiator (alice, the QBT buyer) we must generate the secret + submit H; the participant must not.
   async join({ id, token, btcDest, qbitDest }) {
-    this.role = "bob"; this.id = id; this.token = token; this.btcDest = btcDest; this.qbitDest = qbitDest;
-    await this.#freshKeys(false);
+    this.id = id; this.token = token; this.btcDest = btcDest; this.qbitDest = qbitDest;
+    const pre = await this.#api(`/swaps/${id}`, { token });
+    this.role = pre.role; this.direction = pre.direction || "btc2qbt";
+    await this.#freshKeys(this.role === "alice");
     const v = await this.#submit();
-    this.direction = v.direction; this.terms = { btcSats: v.terms?.btcSats, qbtSats: v.terms?.qbtSats };
-    return { id, direction: v.direction };
+    this.terms = { btcSats: v.terms?.btcSats, qbtSats: v.terms?.qbtSats };
+    return { id, role: this.role, direction: this.direction };
   }
   // Enter an already-created swap (e.g. one instantiated by taking an order-book offer) in a given role.
   async enter({ id, token, direction, role, btcDest, qbitDest }) {
@@ -99,11 +108,11 @@ export class SwapClient {
     if (this.role === "alice") body.H = hex(this.H);
     return this.#api(`/swaps/${this.id}/party`, { token: this.token, method: "POST", body });
   }
-  link(bobToken) {
+  link(inviteToken) {
     const l = globalThis.location;
     const lang = l?.search ? new URLSearchParams(l.search).get("lang") : null;   // carry the sharer's language into the invite link
     const q = lang ? `?lang=${encodeURIComponent(lang)}` : "";
-    return `${l?.origin || ""}${l?.pathname || ""}${q}#coord=${encodeURIComponent(this.base)}&id=${this.id}&token=${bobToken}`;
+    return `${l?.origin || ""}${l?.pathname || ""}${q}#coord=${encodeURIComponent(this.base)}&id=${this.id}&token=${inviteToken}`;
   }
 
   // ── live drive ────────────────────────────────────────────────────────────────

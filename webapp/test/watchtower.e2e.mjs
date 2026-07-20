@@ -28,8 +28,8 @@ async function main() {
   const dests = async (w) => ({ btcDest: await btc.rpcWallet(w, "getnewaddress", "", "bech32"), qbitDest: await qbit.rpcWallet(w, "getnewaddress") });
   const alice = new SwapClient({ coordinator: BASE, onUpdate: (v) => v.safetyNet === "armed" && console.log("[alice] safety net armed ✓") });
   const bob = new SwapClient({ coordinator: BASE, onUpdate: (v) => v.safetyNet === "armed" && console.log("[bob]   safety net armed ✓") });
-  const created = await alice.create({ direction: "btc2qbt", btcSats: 100000000, qbtSats: 500000000, securityLevel: "high", ...(await dests("alice")) });
-  await bob.join({ id: created.id, token: created.bobToken, ...(await dests("bob")) });
+  const created = await alice.create({ role: "alice", btcSats: 100000000, qbtSats: 500000000, securityLevel: "high", ...(await dests("alice")) });
+  await bob.join({ id: created.id, token: created.inviteToken, ...(await dests("bob")) });
   alice.start(); bob.start();
 
   const ready = await (async () => { for (let i = 0; i < 60; i++) { if (alice.view?.htlc) return alice.view; await sleep(500); } throw new Error("no READY"); })();

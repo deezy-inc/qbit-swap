@@ -25,9 +25,9 @@ jobs:
         working-directory: coordinator
         run: npm install --no-audit --no-fund && npm test
 
-      - name: web app — key-store envelope + production bundle build
+      - name: web app — bundle build + key-store envelope + coordinator-down broadcast fallback
         working-directory: webapp
         run: |
           npm install --no-audit --no-fund
+          npm run build   # refreshes the @qbit-swap/client copy first, so the tests import the current client
           npm test
-          npm run build

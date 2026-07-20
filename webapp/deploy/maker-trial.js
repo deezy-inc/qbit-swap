@@ -20,7 +20,7 @@ async function postAsk(lot) {
   return o.id;
 }
 
-async function fulfill(swapId, makerSwapToken) {
+async function fulfill(swapId, makerSwapToken, makerRole = "bob") {
   const dests = { btcDest: await btc.rpcWallet("bob", "getnewaddress", "", "bech32"), qbitDest: await qbit.rpcWallet("bob", "getnewaddress") };
   let funded = false;
   const maker = new SwapClient({
@@ -35,7 +35,7 @@ async function fulfill(swapId, makerSwapToken) {
       if (v.state === "COMPLETE") console.log(`  [maker] swap ${swapId.slice(0, 8)} COMPLETE — sold QBT for BTC`);
     },
   });
-  await maker.enter({ id: swapId, token: makerSwapToken, direction: "btc2qbt", role: "bob", ...dests });
+  await maker.enter({ id: swapId, token: makerSwapToken, direction: "btc2qbt", role: makerRole, ...dests });
   maker.start();
 }
 
@@ -54,7 +54,7 @@ async function main() {
         if (mv.status === "taken" && mv.take && !o.handling) {
           o.handling = true;
           console.log(`[maker] ask ${id.slice(0, 8)} taken -> fulfilling swap ${mv.take.swapId.slice(0, 8)}`);
-          await fulfill(mv.take.swapId, mv.take.makerSwapToken);
+          await fulfill(mv.take.swapId, mv.take.makerSwapToken, mv.take.makerRole);
           offers.delete(id);
           await postAsk(o.lot);   // replenish the book with a fresh ask of the same lot
         }

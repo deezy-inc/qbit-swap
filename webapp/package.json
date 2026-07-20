@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "build": "bash build.sh",
-    "test": "node test/keystore.test.mjs"
+    "test": "node test/keystore.test.mjs && node test/broadcast_fallback.test.mjs"
   },
   "dependencies": {
     "@noble/hashes": "^2.2.0",

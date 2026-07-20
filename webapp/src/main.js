@@ -48,7 +48,10 @@ let liveGuard = { risky: false };   // true when funds are committed but the saf
 window.addEventListener("beforeunload", (e) => { if (liveGuard.risky) { e.preventDefault(); e.returnValue = t("leaveWarn"); return t("leaveWarn"); } });
 
 // ── coin / direction helpers ──────────────────────────────────────────────────
+// Every swap is btc2qbt under the hood (initiator=alice=QBT buyer, sends BTC). A party's personal
+// orientation is just a view of their role: alice sends BTC / sells nothing (buys QBT); bob sends QBT.
 const DIR = { btc2qbt: { from: "BTC", to: "QBT" }, qbt2btc: { from: "QBT", to: "BTC" } };
+const dirForRole = (role) => (role === "bob" ? "qbt2btc" : "btc2qbt");
 const coinLeg = (coin) => (coin === "BTC" ? "btc" : "qbit");
 const sats = (n) => (n / 1e8).toLocaleString(undefined, { maximumFractionDigits: 8 });
 const toSats = (v) => Math.round(parseFloat(v) * 1e8);
@@ -130,10 +133,11 @@ async function faucetNewAddress(leg) { const r = await fetch(`${FAUCET}/newaddre
 async function prefill(input, coin) { if (!FAUCET) return; try { input.value = await faucetNewAddress(coinLeg(coin)); } catch {} }
 
 // ── flow state ────────────────────────────────────────────────────────────────
-const flow = { mode: null, direction: null, coordinator: DEFAULT_COORD, btcSats: 0, qbtSats: 0, receiveAddr: "", refundAddr: "", client: null, bobLink: null };
+const flow = { mode: null, role: null, direction: null, coordinator: DEFAULT_COORD, btcSats: 0, qbtSats: 0, receiveAddr: "", refundAddr: "", client: null, inviteLink: null };
 const coinSats = (coin) => (coin === "BTC" ? flow.btcSats : flow.qbtSats);
-// initiator (create/take) sends `from`, receives `to`; participant (join) sends `to`, receives `from`.
-const roleCoins = () => { const d = DIR[flow.direction]; return flow.mode === "join" ? { send: d.to, recv: d.from } : { send: d.from, recv: d.to }; };
+// What THIS party sends/receives, from their role: alice (QBT buyer) sends BTC & receives QBT; bob
+// (QBT seller) sends QBT & receives BTC. Independent of who created the swap.
+const roleCoins = () => (flow.role === "bob" ? { send: "QBT", recv: "BTC" } : { send: "BTC", recv: "QBT" });
 // coordinator REST helpers (the order book lives outside the per-party SwapClient)
 const coordUrl = (p) => `${DEFAULT_COORD}${p}`;
 const coordGet = async (p) => { const r = await fetch(coordUrl(p)); if (!r.ok) throw new Error((await r.json()).error || r.status); return r.json(); };
@@ -284,6 +288,9 @@ async function stepTrades() {
 
 function chooseDirection(direction) {
   flow.direction = direction;
+  // The creator's own role: buying QBT (btc2qbt) → initiator (alice); selling QBT (qbt2btc) →
+  // participant (bob). The QBT buyer is always the initiator, so a seller-creator shares the alice link.
+  flow.role = direction === "btc2qbt" ? "alice" : "bob";
   if (ORDERBOOK) return showMarket(direction);   // order book (flagged); otherwise go straight to peer-to-peer
   flow.mode = "create"; stepConfirm();
 }
@@ -323,9 +330,9 @@ function offerRow(o, action) {
 }
 async function takeAndStart(o, action) {
   try {
-    const take = await coordPost(`/offers/${o.id}/take`);       // { swapId, takerToken, direction, terms }
+    const take = await coordPost(`/offers/${o.id}/take`);       // { swapId, takerToken, role, terms }
     clearInterval(window._bookTimer);
-    flow.mode = "take"; flow.takeAction = action; flow.direction = take.direction;
+    flow.mode = "take"; flow.takeAction = action; flow.role = take.role; flow.direction = dirForRole(take.role);
     flow.btcSats = take.terms.btcSats; flow.qbtSats = take.terms.qbtSats;
     flow.takeSwapId = take.swapId; flow.takeToken = take.takerToken; flow.receiveAddr = ""; flow.refundAddr = "";
     stepTakeConfirm();
@@ -343,7 +350,7 @@ function stepTakeConfirm() {
 }
 async function doTake() {
   flow.client = mkClient({ coordinator: flow.coordinator || DEFAULT_COORD });
-  await flow.client.enter({ id: flow.takeSwapId, token: flow.takeToken, direction: flow.direction, role: "alice", ...destsForClient() });
+  await flow.client.enter({ id: flow.takeSwapId, token: flow.takeToken, direction: "btc2qbt", role: flow.role, ...destsForClient() });
   await vault.save(flow.client.secrets());
   stepBackup(() => startLive());
 }
@@ -359,8 +366,8 @@ async function recoverCard(ids) {
   for (const id of ids) {
     const s = await vault.load(id);
     const label = (s.qbtSats != null && s.btcSats != null)
-      ? t(s.direction === "btc2qbt" ? "resumeBuy" : "resumeSell", { qbt: sats(s.qbtSats), btc: sats(s.btcSats) })
-      : t("resumeBtn", { from: DIR[s.direction]?.from, to: DIR[s.direction]?.to, id: shorten(id, 6) });
+      ? t(s.role === "alice" ? "resumeBuy" : "resumeSell", { qbt: sats(s.qbtSats), btc: sats(s.btcSats) })
+      : t("resumeBtn", { from: DIR[dirForRole(s.role)]?.from, to: DIR[dirForRole(s.role)]?.to, id: shorten(id, 6) });
     card.append(h("button", { class: "primary", style: "width:100%;margin-top:8px", onclick: () => resumeSwap(s) }, label));
   }
   const fileInput = h("input", { type: "file", accept: "application/json", style: "display:none", onchange: async (e) => { const f = e.target.files?.[0]; if (!f) return; try { resumeSwap(importBackup(await f.text())); } catch (err) { alert(t("errReadBackup", { msg: err.message })); } } });
@@ -498,8 +505,8 @@ function destsForClient() {
 }
 async function doCreate() {
   flow.client = mkClient({ coordinator: flow.coordinator });
-  const res = await flow.client.create({ direction: flow.direction, btcSats: flow.btcSats, qbtSats: flow.qbtSats, securityLevel: "high", ...destsForClient() });
-  flow.bobLink = res.bobLink;
+  const res = await flow.client.create({ role: flow.role, btcSats: flow.btcSats, qbtSats: flow.qbtSats, securityLevel: "high", ...destsForClient() });
+  flow.inviteLink = res.inviteLink;
   await vault.save(flow.client.secrets());
   stepBackup(() => stepShare());
 }
@@ -531,13 +538,13 @@ function stepBackup(next) {
     confirmRow, cont));
 }
 
-const linkBox = () => h("div", { class: "mono", style: "background:var(--panel2);padding:10px;border-radius:8px" }, flow.bobLink);
+const linkBox = () => h("div", { class: "mono", style: "background:var(--panel2);padding:10px;border-radius:8px" }, flow.inviteLink);
 function stepShare() {
   rerender = stepShare;
   // Copy reveals the Continue button (which goes straight live) — no intermediate confirm slide.
   const cont = h("button", { class: "primary", style: "width:100%;margin-top:12px;display:none", onclick: () => startLive() }, t("continue"));
   const copyBtn = h("button", { class: "primary", style: "width:100%;margin-top:16px", onclick: async () => {
-    try { await navigator.clipboard?.writeText(flow.bobLink); } catch {}
+    try { await navigator.clipboard?.writeText(flow.inviteLink); } catch {}
     copyBtn.textContent = t("copiedCheck");
     cont.style.display = "block";
   } }, t("copyLink"));
@@ -568,7 +575,10 @@ async function startParticipant({ coordinator, id, token }) {
     return render(screen({ title: t("swapCanceled"), body: [h("p", { class: "note" }, v.canceled?.byYou ? t("cancelByYou") : t("cancelByCp"))] }));
   }
   startJoinHeartbeat(coordinator, id, token);   // keep presence alive through the entering-info screens
-  flow.direction = v.direction; flow.btcSats = v.terms.btcSats; flow.qbtSats = v.terms.qbtSats;
+  // Our role comes from the token (the coordinator knows which side it controls); our send/receive
+  // orientation follows from it. A joiner may be the initiator (alice) if the creator was selling QBT.
+  flow.role = v.role; flow.direction = dirForRole(v.role);
+  flow.btcSats = v.terms.btcSats; flow.qbtSats = v.terms.qbtSats;
   flow.feerates = v.feerates;
   stepInvited();
 }
@@ -649,8 +659,9 @@ function swapTimeline(v, send, recv) {
 function renderLive(card, v) {
   while (card.firstChild) card.removeChild(card.firstChild);
   // Backfill deal details from the coordinator view (authoritative) — on a resume from a backup file
-  // the amount screen was skipped, so flow.btcSats/qbtSats/direction would otherwise be unset (→ "0 BTC").
-  if (v.direction && !flow.direction) flow.direction = v.direction;
+  // the amount screen was skipped, so flow.role/btcSats/qbtSats would otherwise be unset (→ "0 BTC").
+  if (v.role && !flow.role) flow.role = v.role;
+  if (flow.role && !flow.direction) flow.direction = dirForRole(flow.role);
   if (v.terms) { flow.btcSats = flow.btcSats || v.terms.btcSats || 0; flow.qbtSats = flow.qbtSats || v.terms.qbtSats || 0; }
   const { send, recv } = roleCoins();
   const fundLeg = coinLeg(send), funded = v.funding?.[fundLeg];
@@ -709,8 +720,8 @@ function renderLive(card, v) {
     const { net, fee } = netReceive(recv, v.feerates);
     card.append(h("p", { class: "note" }, t("netReceive", { net: sats(net), coin: recv, fee: feeStr(recv, fee) })));
   }
-  if (!terminal && flow.mode === "create" && flow.bobLink) {
-    card.append(h("div", { class: "btns", style: "margin-top:8px" }, copyButton("copyInvite", "inviteCopied", () => flow.bobLink)));
+  if (!terminal && flow.mode === "create" && flow.inviteLink) {
+    card.append(h("div", { class: "btns", style: "margin-top:8px" }, copyButton("copyInvite", "inviteCopied", () => flow.inviteLink)));
   }
   // While waiting for the counterparty, let the creator go back to the share screen.
   if (!terminal && !addr && flow.mode === "create") {
@@ -743,22 +754,25 @@ function renderLive(card, v) {
   if (terminal) vault.purge(v.id).catch(() => {});
 }
 function statusLine(v, send, recv) {
-  const initiator = flow.mode !== "join";   // create or take
-  if (!v.htlc) return initiator ? t("stWaitJoin") : t("stSetup");
+  const amCreator = flow.mode !== "join";     // I created/shared the swap (drives the "waiting to be joined" copy)
+  const amInitiator = flow.role === "alice";  // I hold the secret and claim first (the QBT buyer)
+  if (!v.htlc) return amCreator ? t("stWaitJoin") : t("stSetup");
   switch (v.state) {
     case "COMPLETE": return t("stReceived", { amt: sats(coinSats(recv)), coin: recv });
     case "REFUNDED": return t("stReturned", { coin: send });
-    case "CLAIMABLE": return initiator ? t("stBothFunded") : t("stWaitClaim");
+    case "CLAIMABLE": return amInitiator ? t("stBothFunded") : t("stWaitClaim");
     case "MATURING": return t("stMaturing");
-    case "CLAIMED": return initiator ? t("stClaimed") : t("stPreimage");
+    case "CLAIMED": return amInitiator ? t("stClaimed") : t("stPreimage");
     default: return v.funding?.[coinLeg(send)] ? t("stWaitFund") : t("stWaitDeposit");
   }
 }
 
 // ── resume from vault / backup ────────────────────────────────────────────────
 function resumeSwap(secrets) {
-  flow.mode = secrets.role === "alice" ? "create" : "join";
-  flow.direction = secrets.direction; flow.coordinator = secrets.coordinator;
+  flow.role = secrets.role;                      // alice = QBT buyer/initiator, bob = QBT seller
+  flow.direction = dirForRole(secrets.role);
+  flow.mode = "join";                            // resume never re-shares (the invite link isn't in the backup)
+  flow.coordinator = secrets.coordinator;
   flow.client = mkClient({ coordinator: secrets.coordinator }).restore(secrets);
   startLive();
 }
@@ -790,7 +804,7 @@ function renderChrome() {
 // Clicking the Qbit logo clears the current flow and returns to the home screen.
 function goHome() {
   flow.client?.stop?.(); stopJoinHeartbeat();
-  Object.assign(flow, { mode: null, direction: null, btcSats: 0, qbtSats: 0, receiveAddr: "", refundAddr: "", client: null, bobLink: null, _recoverySaved: false });
+  Object.assign(flow, { mode: null, role: null, direction: null, btcSats: 0, qbtSats: 0, receiveAddr: "", refundAddr: "", client: null, inviteLink: null, _recoverySaved: false });
   liveGuard = { risky: false };
   if (location.hash) history.replaceState(null, "", location.pathname + location.search);
   stepWelcome();   // always return to the hero landing, not the direction chooser

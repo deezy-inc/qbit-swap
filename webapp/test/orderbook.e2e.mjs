@@ -33,17 +33,18 @@ async function main() {
   const best = book.asks[0];
   const offerId = best.id, makerToken = posted.find((p) => p.id === offerId).makerToken;
   const take = await api(`/offers/${offerId}/take`, { m: "POST" });
-  console.log(`\n[taker] took ${offerId.slice(0, 8)} -> swap ${take.swapId.slice(0, 8)} (${take.direction}); buys ${take.terms.qbtSats / 1e8} QBT for ${take.terms.btcSats / 1e8} BTC`);
+  console.log(`\n[taker] took ${offerId.slice(0, 8)} -> swap ${take.swapId.slice(0, 8)} (role ${take.role}); buys ${take.terms.qbtSats / 1e8} QBT for ${take.terms.btcSats / 1e8} BTC`);
 
-  // Taker enters as initiator (alice). Maker discovers the take and enters as participant (bob).
+  // The QBT buyer is the initiator (alice). For an ask (maker sells QBT) the taker buys → taker=alice,
+  // maker=bob; the coordinator tells each side its role (take.role / take.makerRole).
   const takerDests = { btcDest: await btc.rpcWallet("alice", "getnewaddress", "", "bech32"), qbitDest: await qbit.rpcWallet("alice", "getnewaddress") };
   const makerDests = { btcDest: await btc.rpcWallet("bob", "getnewaddress", "", "bech32"), qbitDest: await qbit.rpcWallet("bob", "getnewaddress") };
   const taker = new SwapClient({ coordinator: BASE, onUpdate: (v) => v.actionError && console.log("[taker] err:", v.actionError) });
   const maker = new SwapClient({ coordinator: BASE, onUpdate: (v) => v.actionError && console.log("[maker] err:", v.actionError) });
-  await taker.enter({ id: take.swapId, token: take.takerToken, direction: take.direction, role: "alice", ...takerDests });
+  await taker.enter({ id: take.swapId, token: take.takerToken, role: take.role, ...takerDests });
   const mv = await api(`/offers/${offerId}?makerToken=${makerToken}`);
-  await maker.enter({ id: mv.take.swapId, token: mv.take.makerSwapToken, direction: take.direction, role: "bob", ...makerDests });
-  console.log("[maker] fulfilled the take (entered as participant)");
+  await maker.enter({ id: mv.take.swapId, token: mv.take.makerSwapToken, role: mv.take.makerRole, ...makerDests });
+  console.log(`[maker] fulfilled the take (entered as ${mv.take.makerRole})`);
   taker.start(); maker.start();
 
   const ready = await (async () => { for (let i = 0; i < 60; i++) { if (taker.view?.htlc) return taker.view; await sleep(500); } throw new Error("no READY"); })();

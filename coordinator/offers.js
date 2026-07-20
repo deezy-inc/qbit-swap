@@ -1,7 +1,8 @@
 // Order book on top of the swap engine. A maker posts an offer (one lot): "I give X, I want Y". The
-// book is public; a taker clicks an offer to take it, which instantiates a swap from the offer's terms
-// with the TAKER as the initiator (holds the secret, funds first). The maker retrieves the take with
-// its maker token and fulfills the other side. The coordinator stays keyless — an offer holds no keys.
+// book is public; a taker clicks an offer to take it, which instantiates a swap from the offer's terms.
+// The initiator (alice, holds the secret) is ALWAYS the QBT buyer — so we hand the alice token to
+// whichever side (taker or maker) is buying QBT, not automatically to the taker. The maker retrieves
+// the take with its maker token and fulfills the other side. The coordinator stays keyless.
 //
 // Pair orientation: QBT priced in BTC (price = BTC per QBT).
 //   ask = maker sells QBT for BTC (gives QBT, wants BTC)   — a taker "buys QBT"
@@ -41,14 +42,17 @@ export function book() {
   return { asks, bids };
 }
 
-// Take an open offer -> instantiate a swap. Taker = initiator (alice); maker = participant (bob).
+// Take an open offer -> instantiate a swap (always btc2qbt). The QBT BUYER gets the alice/initiator
+// token: an ask means the maker sells QBT, so the TAKER buys QBT (taker=alice); a bid means the maker
+// buys QBT, so the MAKER is the buyer (maker=alice, taker=bob). Each side is told its role.
 export function takeOffer(o) {
   if (o.status !== "open") throw new Error("offer is not open");
-  const direction = o.wantCoin === "BTC" ? "btc2qbt" : "qbt2btc";   // taker sends what the maker wants
-  const swap = createSwap({ btcSats: o.btcSats, qbtSats: o.qbtSats, securityLevel: "high", direction });
+  const takerBuysQbt = o.side === "ask";                 // ask = maker sells QBT → taker buys QBT
+  const takerRole = takerBuysQbt ? "alice" : "bob", makerRole = takerBuysQbt ? "bob" : "alice";
+  const swap = createSwap({ btcSats: o.btcSats, qbtSats: o.qbtSats, securityLevel: "high" });
   o.status = "taken";
-  o.take = { swapId: swap.id, makerSwapToken: swap.tokens.bob, takenAt: Date.now() };
-  return { swapId: swap.id, takerToken: swap.tokens.alice, direction, terms: swap.terms };
+  o.take = { swapId: swap.id, makerSwapToken: swap.tokens[makerRole], makerRole, takenAt: Date.now() };
+  return { swapId: swap.id, takerToken: swap.tokens[takerRole], role: takerRole, terms: swap.terms };
 }
 export function cancelOffer(o) { if (o.status === "open") o.status = "cancelled"; return o; }
 // Maker view (auth'd): includes the take so the maker can fulfill (its swap token).

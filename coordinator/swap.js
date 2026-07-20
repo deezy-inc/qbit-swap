@@ -1,15 +1,17 @@
-// Keyless swap model + Tier-Nolan state machine, BIDIRECTIONAL. The coordinator never holds keys,
-// preimages (until public), or funds. It derives the two HTLC addresses, watches both chains, gates
-// the initiator's claim on reorg-safe confirmations, surfaces refundability once timelocks pass,
-// broadcasts party-signed txs, and surfaces the revealed preimage. Optional JSON persistence + a
-// change pub/sub feed the API/SSE.
+// Keyless swap model + Tier-Nolan state machine. The coordinator never holds keys, preimages (until
+// public), or funds. It derives the two HTLC addresses, watches both chains, gates the initiator's
+// claim on reorg-safe confirmations, surfaces refundability once timelocks pass, broadcasts
+// party-signed txs, and surfaces the revealed preimage. Optional JSON persistence + a change pub/sub
+// feed the API/SSE.
 //
-// Roles are direction-neutral: the CREATOR is the initiator (holds the secret); the joiner is the
-// participant. `direction` says which coin the initiator sends:
-//   "btc2qbt": initiator sends BTC (fromLeg), receives QBT (toLeg)
-//   "qbt2btc": initiator sends QBT (fromLeg), receives BTC (toLeg)
-// The initiator funds fromLeg (longer timelock) and claims toLeg (shorter timelock, revealing the
-// preimage); the participant funds toLeg and claims fromLeg with the now-public preimage.
+// Roles are FIXED so the QBT BUYER is always the initiator (alice, holds the secret), no matter who
+// created the swap link. Every swap is btc2qbt under the hood: the initiator funds fromLeg=BTC (longer
+// timelock) and claims toLeg=QBT (shorter timelock, revealing the preimage); the participant (bob, the
+// QBT seller) funds QBT and claims BTC with the now-public preimage. This is the only reorg-safe
+// assignment — the buyer's BTC funding stays refundable until they reveal, so BOTH parties can fund
+// immediately and the value-scaled gate sits on the buyer's QBT claim. Who sells QBT is decided purely
+// by which token (alice/bob) each party holds; the vulnerable "initiator sells QBT" arrangement is no
+// longer constructible. `direction` is retained as "btc2qbt" on every swap for view/compat.
 import { randomBytes } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { sha256 } from "@noble/hashes/sha2.js";
@@ -113,9 +115,9 @@ const REORG_MARGIN = Number(process.env.REORG_MARGIN || 3);                 // c
 const MIN_CONFS = { btc: Number(process.env.MIN_CONFS_BTC || 1), qbit: Number(process.env.MIN_CONFS_QBIT || 1) };   // never 0-conf, but otherwise let the value-scaled math decide
 const UNPRICED_CONFS = Number(process.env.UNPRICED_CONFS || 6);   // conservative fallback when the reorg cost can't be priced (node model unavailable)
 const TO_MULT = Number(process.env.HTLC_TO_MULT || 2);                      // claim window ≈ maturity × this + base
-const TO_BASE_SECS = Number(process.env.HTLC_TO_BASE_SECS || 3600);         // + slack to fund + detect (1h)
-const FROM_GAP_SECS = Number(process.env.HTLC_FROM_GAP_SECS || 3600);       // participant's claim window after the reveal
-const MIN_TO_SECS = Number(process.env.MIN_TO_SECS || 3600);               // floor on the claim window
+const TO_BASE_SECS = Number(process.env.HTLC_TO_BASE_SECS || 10800);        // toLeg (QBT-seller refund) base window: 3h — funding/detection slack, plus a ~3 BTC flat work-cost floor against a rented-hashrate sprint compressing the height-based CLTV (censor the buyer's claim, refund early, take the BTC with the mempool-leaked preimage). Large swaps widen further via the confs term.
+const FROM_GAP_SECS = Number(process.env.HTLC_FROM_GAP_SECS || 7200);       // extra BTC time the buyer's leg outlasts the seller's: 2h — absorbs long Bitcoin inter-block gaps (P(no block in 2h) ≈ e^-12) so the seller's BTC claim can't be refunded out from under it
+const MIN_TO_SECS = Number(process.env.MIN_TO_SECS || 10800);              // floor on the toLeg window (3h)
 const btcSubsidySats = (h) => Math.floor(5_000_000_000 / 2 ** Math.floor(h / 210_000));   // BTC block reward at height h
 
 // Confirmations the initiator's claimed leg (toLeg) must reach so that reorging it costs ≥ REORG_MARGIN
@@ -144,8 +146,11 @@ function htlcWindows(toLeg, confs) {
   const toSecs = Math.max(MIN_TO_SECS, Math.round(confs * BLOCK_SECS[toLeg] * TO_MULT + TO_BASE_SECS));
   return { toSecs, fromSecs: toSecs + FROM_GAP_SECS };
 }
-export function createSwap({ btcSats, qbtSats, securityLevel = "high", direction = "btc2qbt" }) {
-  if (direction !== "btc2qbt" && direction !== "qbt2btc") throw new Error("bad direction");
+export function createSwap({ btcSats, qbtSats, securityLevel = "high" }) {
+  // The QBT buyer is ALWAYS the initiator (alice): every swap is btc2qbt (initiator sends BTC, receives
+  // QBT). Who sells QBT is chosen purely by which token each party keeps — there is no way to construct
+  // a swap where the initiator sells QBT (the reorg-unsafe arrangement).
+  const direction = "btc2qbt";
   // Reject dust-level swaps: the amount must comfortably exceed claim/refund fees (incl. the top
   // watchtower fee tier) or the spend would produce a dust/negative output.
   const minAmt = (n) => (n / 1e8).toFixed(8).replace(/\.?0+$/, "");   // sats → BTC/QBT decimal, no trailing zeros
@@ -172,7 +177,8 @@ export const getSwap = (id) => swaps.get(id);
 export const roleOf = (s, tok) => (tok === s.tokens.alice ? "alice" : tok === s.tokens.bob ? "bob" : null);
 export const allSwaps = () => [...swaps.values()];
 
-// Party submits pubkeys + destination addresses. The creator (alice/initiator) also submits H.
+// Party submits pubkeys + destination addresses. The initiator (alice, the QBT buyer) also submits H —
+// whether they created the swap or joined it via the invite link.
 // Either party may cancel a swap that NOBODY has funded yet — this clears out stale, never-used swaps
 // so the coordinator isn't left watching them. The record is kept (state CANCELED, sticky): the HTLC
 // addresses stay valid, so if someone funds one anyway they can still refund after the timelock.

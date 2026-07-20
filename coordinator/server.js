@@ -63,8 +63,10 @@ async function handle(req, res) {
     if (method === "POST" && url.pathname === "/swaps") {
       const b = await readBody(req);
       if (!(b.btcSats > 0) || !(b.qbtSats > 0)) return json(res, 400, { error: "btcSats and qbtSats required" });
-      const s = createSwap({ btcSats: b.btcSats, qbtSats: b.qbtSats, securityLevel: b.securityLevel, direction: b.direction });
-      return json(res, 201, { id: s.id, tokens: s.tokens });   // Alice shares tokens.bob as Bob's link
+      const s = createSwap({ btcSats: b.btcSats, qbtSats: b.qbtSats, securityLevel: b.securityLevel });
+      // Every swap is btc2qbt: tokens.alice controls the QBT-buyer (initiator) side, tokens.bob the
+      // QBT-seller side. The creator keeps whichever matches their side and shares the other as the link.
+      return json(res, 201, { id: s.id, tokens: s.tokens });
     }
 
     // ── order book ────────────────────────────────────────────────────────────
