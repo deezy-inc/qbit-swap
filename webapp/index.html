@@ -160,6 +160,20 @@
   .qa .a a { color:var(--accent); }
   @media (max-width:640px){ .qa-grid { grid-template-columns:1fr; } }
   .trades-card { background:var(--surface); border:1px solid var(--line); border-radius:14px; padding:2px 18px 8px; margin-top:clamp(18px,2.5vw,24px); overflow-x:auto; }
+  /* swap progress timeline (live screen) — steps stay visible with tx explorer links */
+  .timeline { margin-top:16px; border-top:1px solid var(--line); padding-top:14px; }
+  .tl-step { display:flex; align-items:flex-start; gap:11px; padding:6px 0; }
+  .tl-icon { flex:none; width:22px; height:22px; border-radius:50%; display:grid; place-items:center; font-size:12px; font-weight:700; box-sizing:border-box; }
+  .tl-icon.done { color:var(--accent-ink); background:var(--accent); }
+  .tl-icon.active { color:var(--accent); border:2px solid var(--accent); animation:pulse 2s infinite; }
+  .tl-icon.todo { color:var(--mut); border:1px solid var(--line); font-size:8px; }
+  .tl-body { padding-top:1px; line-height:1.35; }
+  .tl-label { color:var(--ink); font-size:14.5px; font-weight:550; }
+  .tl-step.todo .tl-label { color:var(--mut); font-weight:400; }
+  .tl-tx { display:block; font-size:12px; margin-top:1px; }
+  .tl-tx a { color:var(--accent); font-family:var(--mono); }
+  .tl-tx a:hover { text-decoration:underline; }
+  .tl-mem { color:var(--warn); }
 
   /* status badge — soft tinted fill, not just an outline */
   .badge { display:inline-flex; align-items:center; gap:6px; padding:4px 11px; border-radius:999px;

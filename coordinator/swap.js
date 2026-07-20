@@ -233,12 +233,21 @@ export async function poll(s) {
   // could underfund their HTLC and short the other side. An underfunded leg is surfaced (shortFunded)
   // but doesn't progress the swap, so it stalls and the underfunder can refund after the timelock.
   const need = { btc: s.terms.btcSats, qbit: s.terms.qbtSats };
-  for (const leg of ["btc", "qbit"]) if (!s.funding[leg]) {
-    const o = await chainOf(leg).findOutput(s.htlc[leg].spk);
-    if (o && o.amountSats >= need[leg]) s.funding[leg] = o;
-    else if (o) s.shortFunded = { ...(s.shortFunded || {}), [leg]: { got: o.amountSats, need: need[leg] } };
+  // Discover funding, or keep re-checking a still-unconfirmed (mempool) deposit until it confirms.
+  // Re-deriving from findOutput while unconfirmed also tracks an RBF'd deposit to its new outpoint,
+  // and clears it if the mempool tx is dropped without replacement.
+  for (const leg of ["btc", "qbit"]) {
+    const cur = s.funding[leg];
+    if (!cur || cur.unconfirmed) {
+      const o = await chainOf(leg).findOutput(s.htlc[leg].spk);
+      if (o && o.amountSats >= need[leg]) s.funding[leg] = { txid: o.txid, vout: o.vout, amountSats: o.amountSats, height: o.height, unconfirmed: o.height == null, spent: false };
+      else if (o) s.shortFunded = { ...(s.shortFunded || {}), [leg]: { got: o.amountSats, need: need[leg] } };
+      else if (cur && cur.unconfirmed) s.funding[leg] = null;   // unconfirmed deposit dropped out of the mempool
+    }
   }
-  for (const leg of ["btc", "qbit"]) if (s.funding[leg] && !s.funding[leg].spent && !(await chainOf(leg).isUnspent(s.funding[leg].txid, s.funding[leg].vout))) s.funding[leg].spent = true;
+  // Spent-detection only for CONFIRMED funding (a claim/refund spending it). An unconfirmed deposit is
+  // managed by the re-poll above, not treated as "spent" when gettxout can't see it yet.
+  for (const leg of ["btc", "qbit"]) if (s.funding[leg] && !s.funding[leg].unconfirmed && !s.funding[leg].spent && !(await chainOf(leg).isUnspent(s.funding[leg].txid, s.funding[leg].vout))) s.funding[leg].spent = true;
 
   const from = s.funding[fromLeg], to = s.funding[toLeg];
   // recompute the pre-claim state from ground truth (broadcast() owns CLAIMED/COMPLETE/REFUNDED)
@@ -246,7 +255,7 @@ export async function poll(s) {
     let st = "READY";
     if (from) st = "FROM_FUNDED";
     if (to && !to.spent) {
-      const confs = H[toLeg] - to.height + 1; to.confs = confs;
+      const confs = to.height != null ? H[toLeg] - to.height + 1 : 0; to.confs = confs;   // 0 while unconfirmed (mempool)
       st = from ? (confs >= s.confsTarget.confs ? "CLAIMABLE" : "MATURING") : "TO_FUNDED";
     }
     s.state = st;

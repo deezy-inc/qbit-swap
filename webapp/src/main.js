@@ -254,17 +254,21 @@ async function stepTrades() {
   markScreen(back);
   let trades = null;
   try { trades = await coordGet("/trades"); } catch { trades = []; }
+  let btcUsd = 0;
+  try { btcUsd = await btcUsdPrice(); } catch { /* CoinGecko unavailable → USD column shows — */ }   // cached 2 min
   let content;
   if (!trades.length) {
     content = h("p", { class: "muted", style: "margin-top:24px" }, t("tradesEmpty"));
   } else {
+    const usdCell = (tr) => (btcUsd ? `$${trimZeros((tr.price * btcUsd).toFixed(4))}` : "—");   // USD per QBT = (BTC/QBT) × BTCUSD
     const rows = trades.map((tr) => h("tr", {},
       h("td", {}, `${sats(tr.qbtSats)} QBT`),
       h("td", {}, `${sats(tr.btcSats)} BTC`),
-      h("td", {}, `${trimZeros(tr.price.toFixed(8))} BTC/QBT`),
+      h("td", {}, trimZeros(tr.price.toFixed(8))),
+      h("td", {}, usdCell(tr)),
       h("td", { class: "when" }, tr.settledAt ? ago(tr.settledAt) : "—")));
     content = h("div", { class: "trades-card" }, h("table", { class: "trades" },
-      h("thead", {}, h("tr", {}, h("th", {}, "QBT"), h("th", {}, "BTC"), h("th", {}, t("priceLabel")), h("th", {}, t("tradesWhen")))),
+      h("thead", {}, h("tr", {}, h("th", {}, "QBT"), h("th", {}, "BTC"), h("th", {}, t("tradesPriceBtc")), h("th", {}, t("tradesPriceUsd")), h("th", {}, t("tradesWhen")))),
       h("tbody", {}, ...rows)));
   }
   render(h("div", { class: "page" },
@@ -576,8 +580,43 @@ function startLive() {
   flow.client.start();
 }
 const STATE_CLASS = { COMPLETE: "good", REFUNDED: "warn", CLAIMABLE: "info", CLAIMED: "info", ABORTED: "bad" };
+// Public block explorers for the tx links in the timeline.
+const EXPLORER = { btc: "https://mempool.space/tx/", qbit: "https://qbitmempool.robertclarke.com/tx/" };
+const txLink = (leg, txid) => h("a", { href: EXPLORER[leg] + txid, target: "_blank", rel: "noopener" }, shorten(txid, 8));
+
+// A persistent progress timeline for the swap: every step stays visible (matched → you sent →
+// counterparty sent → you received / refunded), each with a checkmark and a link to the transaction
+// on a public explorer, so the whole history — including the final txid — remains on the page.
+function swapTimeline(v, send, recv) {
+  const fundLeg = coinLeg(send), claimLeg = coinLeg(recv);
+  const myFund = v.funding?.[fundLeg], cpFund = v.funding?.[claimLeg];
+  const myClaim = v.broadcasts?.[`${claimLeg}:claim`];      // the tx that delivers your received coin
+  const myRefund = v.broadcasts?.[`${fundLeg}:refund`];     // your refund tx on abort
+  const complete = v.state === "COMPLETE", refunded = v.state === "REFUNDED";
+  const steps = [
+    { label: t("tlMatched"), done: !!v.htlc },
+    { label: t("tlYouSent", { coin: send }), done: !!myFund, leg: fundLeg, txid: myFund?.txid, mem: myFund?.unconfirmed },
+    { label: t("tlCpSent", { coin: recv }), done: !!cpFund, leg: claimLeg, txid: cpFund?.txid, mem: cpFund?.unconfirmed },
+  ];
+  if (refunded) steps.push({ label: t("tlRefunded", { coin: send }), done: !!myRefund, leg: fundLeg, txid: myRefund });
+  else steps.push({ label: t("tlYouReceived", { coin: recv }), done: complete || !!myClaim, leg: claimLeg, txid: myClaim });
+  let activeSet = false;
+  return h("div", { class: "timeline" }, ...steps.map((s) => {
+    const state = s.done ? "done" : (!activeSet && (activeSet = true) ? "active" : "todo");
+    return h("div", { class: "tl-step " + state },
+      h("span", { class: "tl-icon " + state }, s.done ? "✓" : (state === "active" ? "●" : "○")),
+      h("div", { class: "tl-body" },
+        h("span", { class: "tl-label" }, s.label),
+        s.txid ? h("span", { class: "tl-tx" }, s.mem ? h("span", { class: "tl-mem" }, t("tlMempool") + " · ") : null, txLink(s.leg, s.txid)) : null));
+  }));
+}
+
 function renderLive(card, v) {
   while (card.firstChild) card.removeChild(card.firstChild);
+  // Backfill deal details from the coordinator view (authoritative) — on a resume from a backup file
+  // the amount screen was skipped, so flow.btcSats/qbtSats/direction would otherwise be unset (→ "0 BTC").
+  if (v.direction && !flow.direction) flow.direction = v.direction;
+  if (v.terms) { flow.btcSats = flow.btcSats || v.terms.btcSats || 0; flow.qbtSats = flow.qbtSats || v.terms.qbtSats || 0; }
   const { send, recv } = roleCoins();
   const fundLeg = coinLeg(send), funded = v.funding?.[fundLeg];
   const addr = v.htlc?.[fundLeg]?.address;
@@ -642,6 +681,9 @@ function renderLive(card, v) {
       funded ? null : h("div", { class: "btns" }, copyButton("copyAddress", "copiedCheck", () => addr))));
   }
 
+  // Persistent progress timeline (each step + its explorer tx link stays on the page, incl. after
+  // completion). Its per-step "in mempool" tag surfaces 0-conf deposit detection on both legs.
+  if (v.htlc) card.append(swapTimeline(v, send, recv));
   card.append(h("p", { class: "note" }, statusLine(v, send, recv)));
   if (!terminal && v.shortFunded) card.append(h("p", { class: "note", style: "color:var(--bad)" }, t("underfundWarn")));
   if (v.actionError) card.append(h("p", { class: "note", style: "color:var(--bad)" }, "⚠ " + v.actionError));

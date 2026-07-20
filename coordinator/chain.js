@@ -86,21 +86,45 @@ export class Chain {
   //             this is the mainnet-safe path — NEVER scantxoutset, which rescans the whole UTXO set
   //   dev     — scantxoutset, fine only because regtest's UTXO set is tiny
   async findOutput(spkHex) {
+    // Returns the funding output as soon as it is seen — INCLUDING while still in the mempool
+    // (`height: null`, unconfirmed). Callers gate on confirmations themselves (the reorg-safe claim
+    // gate); reporting the 0-conf deposit lets the UI show "detected in mempool" and the watchtower
+    // pre-sign recovery against the (already-known) outpoint.
     if (this.backend === "esplora") {
       const utxos = await (await esplora(`/scripthash/${scripthash(spkHex)}/utxo`)).json();
-      const u = (utxos || []).find((x) => x.status?.confirmed);
-      return u ? { txid: u.txid, vout: u.vout, amountSats: u.value, height: u.status.block_height } : null;
+      const u = (utxos || [])[0];
+      return u ? { txid: u.txid, vout: u.vout, amountSats: u.value, height: u.status?.confirmed ? u.status.block_height : null } : null;
     }
     if (this.backend === "rpc" && this.watch === "wallet") {
       const wallet = await this.#ensureWatched(spkHex);
-      const utxos = await this.rpcWallet(wallet, "listunspent", 0, 9999999, "[]", true);
-      const u = (utxos || []).find((x) => x.scriptPubKey === spkHex && x.confirmations > 0);
-      return u ? { txid: u.txid, vout: u.vout, amountSats: Math.round(u.amount * 1e8), height: (await this.height()) - u.confirmations + 1 } : null;
+      const utxos = await this.rpcWallet(wallet, "listunspent", 0, 9999999, "[]", true);   // minconf 0 -> includes mempool
+      const u = (utxos || []).find((x) => x.scriptPubKey === spkHex);
+      if (!u) return null;
+      const c = u.confirmations || 0;
+      return { txid: u.txid, vout: u.vout, amountSats: Math.round(u.amount * 1e8), height: c > 0 ? (await this.height()) - c + 1 : null };
     }
-    // dev, or rpc with watch=scan (e.g. Qbit): scantxoutset — cheap on a small/regtest UTXO set.
+    // dev, or rpc with watch=scan (e.g. Qbit): scantxoutset — cheap on a small/regtest UTXO set. This
+    // sees CONFIRMED outputs only; if nothing is confirmed yet, fall through to a mempool scan so a
+    // deposit is still detected at 0-conf. (Qbit's mainnet node runs -disablewallet, so the wallet
+    // listunspent path isn't available there — but getrawmempool always is.)
     const scan = await this.rpc("scantxoutset", "start", JSON.stringify([`raw(${spkHex})`]));
     const u = (scan.unspents || [])[0];
-    return u ? { txid: u.txid, vout: u.vout, amountSats: Math.round(u.amount * 1e8), height: u.height } : null;
+    if (u) return { txid: u.txid, vout: u.vout, amountSats: Math.round(u.amount * 1e8), height: u.height };
+    return await this.#findInMempool(spkHex);
+  }
+  // Wallet-free 0-conf detection: look through the mempool for an output paying `spkHex`. Cheap on a
+  // young/quiet chain (Qbit); bounded by MEMPOOL_SCAN_CAP so a flooded mempool can't stall a poll.
+  async #findInMempool(spkHex) {
+    let ids;
+    try { ids = await this.rpc("getrawmempool"); } catch { return null; }
+    const cap = Number(env("MEMPOOL_SCAN_CAP", 2000));
+    for (const txid of (ids || []).slice(0, cap)) {
+      let tx;
+      try { tx = await this.rpc("getrawtransaction", txid, true); } catch { continue; }   // works for mempool txs w/o txindex
+      const vout = (tx.vout || []).findIndex((o) => o.scriptPubKey?.hex === spkHex);
+      if (vout >= 0) return { txid, vout, amountSats: Math.round(tx.vout[vout].value * 1e8), height: null };
+    }
+    return null;
   }
   // Import an HTLC scriptPubKey into a dedicated watch-only wallet, forward-only (no historical rescan
   // — HTLC addresses are fresh). Idempotent per process; safe to call every poll.

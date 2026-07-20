@@ -155,7 +155,7 @@ export class SwapClient {
     if (!v.htlc) return;
     // Arm the coordinator watchtower once BOTH legs are funded: pre-sign a fee-ladder claim + a refund
     // so the swap completes/refunds even if this tab closes. Non-custodial — pays only our addresses.
-    if (!this.armed && v.funding?.btc && v.funding?.qbit) { try { await this.armSafetyNet(v); } catch { /* retry next tick */ } }
+    if (v.funding?.btc && v.funding?.qbit) { try { await this.armSafetyNet(v); } catch { /* retry next tick */ } }
 
     const done = (k) => this.acted.has(k) || v.broadcasts?.[k];
     const { claim, refund } = this.legs(v);
@@ -192,7 +192,12 @@ export class SwapClient {
 
   // ── watchtower safety net: pre-sign and upload a fee-ladder claim + a refund ──
   async armSafetyNet(v) {
-    if (this.armed || !v.htlc || !v.funding?.btc || !v.funding?.qbit) return;
+    if (!v.htlc || !v.funding?.btc || !v.funding?.qbit) return;
+    // Arm as soon as both deposits exist — even at 0-conf: the outpoints are known, so the recovery
+    // txs can be pre-signed now. Re-key if a deposit is RBF-replaced (new outpoint) before it confirms,
+    // so the stored bundle always references the live outpoints.
+    const key = `${v.funding.btc.txid}:${v.funding.btc.vout}|${v.funding.qbit.txid}:${v.funding.qbit.vout}`;
+    if (this.armedKey === key) return;
     const { claim, refund } = this.legs(v);
     // participant signs the claim preimage-LESS (the coordinator splices the preimage in on reveal).
     const claimPreimage = this.role === "alice" ? this.secret : new Uint8Array(0);
@@ -211,6 +216,7 @@ export class SwapClient {
     // Keep our own copy of the pre-signed recovery ladder so it can be written into the backup file —
     // the file alone (keys + these txs) is enough to recover even if the coordinator is gone.
     this.recovery = bundle;
+    this.armedKey = key;
     this.armed = true;   // the coordinator now reflects safetyNet.self=true in the view
   }
 
