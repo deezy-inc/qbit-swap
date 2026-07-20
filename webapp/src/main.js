@@ -156,6 +156,10 @@ async function init() {
 }
 
 // Qbit orbit emblem — the brand mark with its dot + ring as a spinning "orbit" group around the core.
+// Centered spinning orbit emblem — the loading indicator while a swap view / backup loads.
+const spinnerEl = (label) => h("div", { style: "display:flex;flex-direction:column;align-items:center;gap:14px;padding:44px 0 36px" },
+  h("div", { class: "hero-emblem boot", style: "margin:0;width:60px", html: EMBLEM_SVG }),
+  label ? h("span", { class: "muted", style: "font-size:14px" }, label) : null);
 const EMBLEM_SVG = `<svg viewBox="0 0 320 320" aria-hidden="true"><path class="core" d="m159.745 75.5137c46.2 0 83.652 37.4503 83.652 83.6483 0 46.197-37.452 83.648-83.652 83.648-46.199 0-83.6516-37.451-83.6516-83.648 0-46.198 37.4526-83.6483 83.6516-83.6483z"/><g class="orbit"><path d="m264.882 234.338c16.044 0 29.049 13.005 29.049 29.048 0 16.042-13.005 29.048-29.049 29.048-16.043 0-29.049-13.006-29.049-29.048 0-16.043 13.006-29.048 29.049-29.048z"/><path d="m46.1611 46.159c62.0959-62.0934 163.4069-61.4602 226.2849 1.4142 41.915 41.9136 56.167 100.9048 42.618 153.9748l-.026-.007c-1.478 5.001-6.104 8.652-11.584 8.652-6.672-.001-12.081-5.409-12.081-12.081 0-1.328.217-2.605.613-3.8 11.713-45.226-.14-95.2914-35.565-130.715-53.246-53.2434-139.575-53.2434-192.821 0-53.2456 53.243-53.2452 139.568.0007 192.812 35.4457 35.444 85.5513 47.29 130.7993 35.543 1.17-.377 2.416-.582 3.711-.582 6.672 0 12.081 5.408 12.081 12.08 0 5.477-3.645 10.099-8.642 11.58l.006.02c-53.071 13.548-112.0653-.704-153.9806-42.617-62.8774-62.874-63.5106-164.181-1.4143-226.274z"/></g></svg>`;
 
 // Landing page — hero + call-to-action + value props.
@@ -557,7 +561,7 @@ function stopJoinHeartbeat() { if (flow._joinHeartbeat) { clearInterval(flow._jo
 
 async function startParticipant({ coordinator, id, token }) {
   flow.mode = "join"; flow.coordinator = coordinator; flow.joinId = id; flow.joinToken = token;
-  render(screen({ title: t("loadingSwap"), body: [h("span", { class: "muted" }, t("fetchingTerms"))] }));
+  render(screen({ title: t("loadingSwap"), body: [spinnerEl(t("fetchingTerms"))] }));
   const v = await (await fetch(`${coordinator}/swaps/${id}`, { headers: { "x-swap-token": token } })).json();
   if (v.state === "CANCELED") {   // creator called it off before it started — don't send them through the join flow
     markScreen(null);
@@ -589,7 +593,7 @@ let liveCard = null;
 function startLive() {
   stopJoinHeartbeat();   // the live client's SSE now maintains presence
   flow.client.stop();   // idempotent: safe if we came back from the share screen and re-enter
-  liveCard = h("div", { class: "card" }, h("span", { class: "muted" }, "…"));
+  liveCard = h("div", { class: "card" }, spinnerEl());
   render(liveCard);
   markScreen(null);   // swap is committed here — no Back handler, so the browser Back button won't drop you out of a live swap
   rerender = () => { if (flow.client?.view) renderLive(liveCard, flow.client.view); };
