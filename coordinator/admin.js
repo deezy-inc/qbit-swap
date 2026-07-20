@@ -56,6 +56,12 @@ function detail(s) {
     htlc: { btc: s.htlc?.btc?.address || null, qbit: s.htlc?.qbit?.address || null },
     funding: s.funding, heights: s.heights, refund: s.refund,
     broadcasts: s.broadcasts, wt: s.wt || null,
+    // Pre-signed watchtower recovery bundle each party uploaded: a compact summary + the full txs.
+    recovery: {
+      alice: s.finish?.alice ? { claimLeg: s.finish.alice.claim?.leg, needsPreimage: s.finish.alice.claim?.needsPreimage, tiers: (s.finish.alice.claim?.tiers || []).map((t) => t.feerate), refundLeg: s.finish.alice.refund?.leg } : null,
+      bob: s.finish?.bob ? { claimLeg: s.finish.bob.claim?.leg, needsPreimage: s.finish.bob.claim?.needsPreimage, tiers: (s.finish.bob.claim?.tiers || []).map((t) => t.feerate), refundLeg: s.finish.bob.refund?.leg } : null,
+    },
+    finish: s.finish || null,   // full pre-signed claim ladder + refund txs (broadcast-ready; pay only their owner)
     party: {
       alice: s.party?.alice ? { btcPub: s.party.alice.btcPub, qbitPub: s.party.alice.qbitPub, btcDest: s.party.alice.btcDest, qbitDest: s.party.alice.qbitDest } : null,
       bob: s.party?.bob ? { btcPub: s.party.bob.btcPub, qbitPub: s.party.bob.qbitPub, btcDest: s.party.bob.btcDest, qbitDest: s.party.bob.qbitDest } : null,
