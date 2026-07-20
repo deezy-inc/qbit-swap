@@ -147,8 +147,8 @@ async function init() {
     if (known) { try { return resumeSwap(await vault.load(q.id)); } catch { /* fall through to fresh join */ } }
     return startParticipant({ coordinator: decodeURIComponent(q.coord), id: q.id, token: q.token });
   }
-  const resumable = await vault.list().catch(() => []);
-  if (resumable.length) return stepChoose(resumable);   // returning user with a swap → skip the intro
+  // The root URL always opens on the hero landing — even for a returning user. Any in-progress swaps
+  // are still one click away: "Start a swap" → the chooser lists them, and the backup-recover card is there too.
   stepWelcome();
 }
 
