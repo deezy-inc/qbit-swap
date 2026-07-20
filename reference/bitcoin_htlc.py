@@ -9,6 +9,7 @@ from p2mr import encode_segwit, _pushdata, _scriptnum
 from txcodec import cs_enc
 
 OP_IF, OP_ELSE, OP_ENDIF, OP_DROP = 0x63, 0x67, 0x68, 0x75
+OP_SIZE = 0x82
 OP_EQUALVERIFY, OP_SHA256 = 0x88, 0xA8
 OP_CHECKSIG, OP_CHECKLOCKTIMEVERIFY = 0xAC, 0xB1
 
@@ -46,6 +47,7 @@ def ecdsa_sign(priv, z32: bytes) -> bytes:
 def htlc_witness_script(hash_h: bytes, claim_pub: bytes, refund_pub: bytes, locktime: int) -> bytes:
     s = bytearray()
     s.append(OP_IF)
+    s.append(OP_SIZE); s += _pushdata(_scriptnum(32)); s.append(OP_EQUALVERIFY)   # pin preimage to 32 bytes
     s.append(OP_SHA256); s += _pushdata(hash_h); s.append(OP_EQUALVERIFY)
     s += _pushdata(claim_pub); s.append(OP_CHECKSIG)
     s.append(OP_ELSE)

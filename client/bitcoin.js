@@ -9,7 +9,7 @@ import { segwitAddr } from "./p2mr.js";
 secp.hashes.sha256 = sha256;
 secp.hashes.hmacSha256 = (key, msg) => hmac(sha256, key, msg);
 
-const OP = { IF: 0x63, ELSE: 0x67, ENDIF: 0x68, DROP: 0x75, EQUALVERIFY: 0x88, SHA256: 0xa8, CHECKSIG: 0xac, CLTV: 0xb1 };
+const OP = { IF: 0x63, ELSE: 0x67, ENDIF: 0x68, DROP: 0x75, SIZE: 0x82, EQUALVERIFY: 0x88, SHA256: 0xa8, CHECKSIG: 0xac, CLTV: 0xb1 };
 const dsha = (b) => sha256(sha256(b));
 
 export const compressedPub = (privBytes) => secp.getPublicKey(privBytes, true);
@@ -25,9 +25,13 @@ export function ecdsaSign(privBytes, digest32) {       // low-S DER + SIGHASH_AL
   return concatBytes(derFromCompact(compact), u8(0x01));
 }
 
+// OP_IF OP_SIZE 32 OP_EQUALVERIFY OP_SHA256 <H> OP_EQUALVERIFY <claim> CHECKSIG OP_ELSE <cltv> CLTV DROP <refund> CHECKSIG OP_ENDIF
+// OP_SIZE 32 OP_EQUALVERIFY pins the preimage length to 32 bytes so the same secret satisfies both
+// legs' hashlocks identically (defense against a differently-sized preimage across chains).
 export function htlcWitnessScript(hashH, claimPub, refundPub, locktime) {
   return concatBytes(
-    u8(OP.IF, OP.SHA256), pushData(hashH), u8(OP.EQUALVERIFY), pushData(claimPub), u8(OP.CHECKSIG),
+    u8(OP.IF, OP.SIZE), pushData(scriptNum(32)), u8(OP.EQUALVERIFY),
+    u8(OP.SHA256), pushData(hashH), u8(OP.EQUALVERIFY), pushData(claimPub), u8(OP.CHECKSIG),
     u8(OP.ELSE), pushData(scriptNum(locktime)), u8(OP.CLTV, OP.DROP), pushData(refundPub), u8(OP.CHECKSIG), u8(OP.ENDIF));
 }
 export const p2wshSpk = (ws) => concatBytes(u8(0x00, 0x20), sha256(ws));

@@ -15,6 +15,7 @@ from typing import List
 # ── opcodes we use ──────────────────────────────────────────────────────────
 OP_IF, OP_ELSE, OP_ENDIF = 0x63, 0x67, 0x68
 OP_DROP, OP_EQUALVERIFY = 0x75, 0x88
+OP_SIZE = 0x82
 OP_SHA256 = 0xA8
 OP_CHECKLOCKTIMEVERIFY = 0xB1
 OP_CHECKSIGPQC = 0xB3            # qbit's post-quantum CHECKSIG (old NOP4 slot)
@@ -131,14 +132,18 @@ def p2mr_spk(script: bytes) -> bytes:
 def htlc_leaf_qbit(hash_h: bytes, receiver_pqc_pubkey: bytes, funder_pqc_pubkey: bytes,
                    locktime: int) -> bytes:
     """
-    OP_IF   OP_SHA256 <H> OP_EQUALVERIFY <receiver_pqc> OP_CHECKSIGPQC   # claim (reveal preimage)
+    OP_IF   OP_SIZE 32 OP_EQUALVERIFY OP_SHA256 <H> OP_EQUALVERIFY <receiver_pqc> OP_CHECKSIGPQC   # claim (reveal preimage)
     OP_ELSE <locktime> OP_CHECKLOCKTIMEVERIFY OP_DROP <funder_pqc> OP_CHECKSIGPQC   # refund
     OP_ENDIF
+
+    OP_SIZE 32 OP_EQUALVERIFY pins the preimage to exactly 32 bytes so the same secret satisfies both
+    chains' hashlocks identically (no differently-sized preimage that only works on one leg).
     """
     assert len(hash_h) == 32
     assert len(receiver_pqc_pubkey) == 32 and len(funder_pqc_pubkey) == 32
     s = bytearray()
     s.append(OP_IF)
+    s.append(OP_SIZE); s += _pushdata(_scriptnum(32)); s.append(OP_EQUALVERIFY)
     s.append(OP_SHA256); s += _pushdata(hash_h); s.append(OP_EQUALVERIFY)
     s += _pushdata(receiver_pqc_pubkey); s.append(OP_CHECKSIGPQC)
     s.append(OP_ELSE)

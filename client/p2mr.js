@@ -2,7 +2,7 @@
 import { sha256 } from "@noble/hashes/sha2.js";
 import { concatBytes, u8, compactSize, pushData, scriptNum, hexToBytes } from "./encoding.js";
 
-export const OP = { IF: 0x63, ELSE: 0x67, ENDIF: 0x68, DROP: 0x75, EQUALVERIFY: 0x88,
+export const OP = { IF: 0x63, ELSE: 0x67, ENDIF: 0x68, DROP: 0x75, SIZE: 0x82, EQUALVERIFY: 0x88,
                     SHA256: 0xa8, CHECKLOCKTIMEVERIFY: 0xb1, CHECKSIGPQC: 0xb3 };
 export const P2MR_LEAF_VERSION = 0xc0;
 export const P2MR_CONTROL_SINGLE_LEAF = u8(P2MR_LEAF_VERSION | 0x01); // 0xc1
@@ -18,11 +18,15 @@ export function leafHash(script, leafVersion = P2MR_LEAF_VERSION) {
 export const singleLeafRoot = (script) => leafHash(script);          // single-leaf tree root == leaf hash
 export const p2mrSpk = (script) => concatBytes(u8(0x52, 0x20), singleLeafRoot(script));
 
-// OP_IF <hashlock><recv>CHECKSIGPQC OP_ELSE <cltv>CLTV DROP <fund>CHECKSIGPQC OP_ENDIF
+// OP_IF OP_SIZE 32 OP_EQUALVERIFY <hashlock><recv>CHECKSIGPQC OP_ELSE <cltv>CLTV DROP <fund>CHECKSIGPQC OP_ENDIF
+// The OP_SIZE 32 OP_EQUALVERIFY guard pins the preimage to exactly 32 bytes: the same secret must
+// satisfy the hashlock on BOTH chains identically, so neither leg can be claimed with a differently
+// encoded/padded preimage that hashes to H on one chain but not the other.
 export function htlcLeafQbit(hashH, recvPub, fundPub, locktime) {
   if (hashH.length !== 32 || recvPub.length !== 32 || fundPub.length !== 32) throw new Error("bad key/hash length");
   return concatBytes(
-    u8(OP.IF, OP.SHA256), pushData(hashH), u8(OP.EQUALVERIFY),
+    u8(OP.IF, OP.SIZE), pushData(scriptNum(32)), u8(OP.EQUALVERIFY),
+    u8(OP.SHA256), pushData(hashH), u8(OP.EQUALVERIFY),
     pushData(recvPub), u8(OP.CHECKSIGPQC),
     u8(OP.ELSE), pushData(scriptNum(locktime)), u8(OP.CHECKLOCKTIMEVERIFY, OP.DROP),
     pushData(fundPub), u8(OP.CHECKSIGPQC), u8(OP.ENDIF));
