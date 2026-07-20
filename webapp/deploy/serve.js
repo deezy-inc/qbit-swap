@@ -55,7 +55,9 @@ function unified() {
         if (!file.startsWith(ROOT)) { res.writeHead(403); return res.end(); }
         let body = await readFile(file);
         if (file.endsWith("index.html")) body = Buffer.from(body.toString().replace("</head>", `${CONFIG}\n</head>`));
-        res.writeHead(200, { "content-type": MIME[extname(file)] || "application/octet-stream" }); res.end(body);
+        // No hashed asset names yet, so tell the browser to revalidate — otherwise a deploy's new
+        // dist/app.js stays invisible behind the cached copy until a hard refresh.
+        res.writeHead(200, { "content-type": MIME[extname(file)] || "application/octet-stream", "cache-control": "no-cache" }); res.end(body);
       } catch { res.writeHead(404); res.end("not found"); }
     }).listen(WEB, BIND, () => resolve());
   });
