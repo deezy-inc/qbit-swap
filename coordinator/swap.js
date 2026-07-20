@@ -214,6 +214,13 @@ async function deriveHtlcs(s) {
   const ct = await reorgConfs(toLeg, s.terms.btcSats, s.terms.qbtSats, s.terms.securityLevel, bh);
   if (process.env.DEV_CONFS_CAP) ct.confs = Math.min(ct.confs, Number(process.env.DEV_CONFS_CAP));
   s.confsTarget = ct;
+  // Reorg/RBF-safe gate on the FUNDING leg the initiator sends (fromLeg). The buyer must not reveal the
+  // preimage (by claiming toLeg) until this deposit is buried, because once the secret is public the
+  // seller claims fromLeg — so that funding tx must no longer be double-spendable (an unconfirmed deposit
+  // is RBF-able; a shallow one is reorg-able). Same value-scaled math, on the fromLeg coin.
+  const fct = await reorgConfs(fromLeg, s.terms.btcSats, s.terms.qbtSats, s.terms.securityLevel, bh);
+  if (process.env.DEV_CONFS_CAP) fct.confs = Math.min(fct.confs, Number(process.env.DEV_CONFS_CAP));
+  s.fromConfsTarget = fct;
 
   // Timelocks derived from the gate's maturity: fromLeg (initiator funds) gets the LONGER window,
   // toLeg (participant funds) the SHORTER one. Each wall-clock window → a block count on its OWN chain,
@@ -269,13 +276,20 @@ export async function poll(s) {
   for (const leg of ["btc", "qbit"]) if (s.funding[leg] && !s.funding[leg].unconfirmed && !s.funding[leg].spent && !(await chainOf(leg).isUnspent(s.funding[leg].txid, s.funding[leg].vout))) s.funding[leg].spent = true;
 
   const from = s.funding[fromLeg], to = s.funding[toLeg];
+  // Confirmation depth of each deposit (0 while still in the mempool).
+  if (from) from.confs = from.height != null ? H[fromLeg] - from.height + 1 : 0;
+  if (to) to.confs = to.height != null ? H[toLeg] - to.height + 1 : 0;
   // recompute the pre-claim state from ground truth (broadcast() owns CLAIMED/COMPLETE/REFUNDED)
   if (!["CLAIMED", "CANCELED", ...TERMINAL].includes(s.state)) {
     let st = "READY";
     if (from) st = "FROM_FUNDED";
     if (to && !to.spent) {
-      const confs = to.height != null ? H[toLeg] - to.height + 1 : 0; to.confs = confs;   // 0 while unconfirmed (mempool)
-      st = from ? (confs >= s.confsTarget.confs ? "CLAIMABLE" : "MATURING") : "TO_FUNDED";
+      // Reveal the preimage (become CLAIMABLE) only when BOTH deposits are buried to their reorg-safe
+      // depth: toLeg protects the buyer against a reorg of the coin they claim; fromLeg protects the
+      // seller, whose subsequent claim must spend a funding tx the buyer can no longer RBF/double-spend.
+      const fromReady = !!from && !from.unconfirmed && from.confs >= s.fromConfsTarget.confs;
+      const toReady = to.confs >= s.confsTarget.confs;
+      st = from ? (fromReady && toReady ? "CLAIMABLE" : "MATURING") : "TO_FUNDED";
     }
     s.state = st;
   }
@@ -306,6 +320,19 @@ async function applyEffects(s, leg, kind, txid) {
 }
 // A party submits a signed tx; the coordinator broadcasts it (keyless).
 export async function broadcast(s, leg, kind, txHex) {
+  // Never relay the buyer's preimage-revealing claim (toLeg) until BOTH deposits are buried to their
+  // reorg/RBF-safe depth:
+  //   · fromLeg (BTC) — so the seller's subsequent claim spends a funding tx the buyer can no longer RBF;
+  //   · toLeg  (QBT) — so once the secret is public the seller can't RBF-cancel their own (still-0-conf)
+  //     deposit out from under the buyer's claim, keeping the QBT AND taking the BTC.
+  // A confirmed tx can't be RBF'd, so requiring both mined closes the window in either confirmation
+  // order. Qbit has no public relay, so this coordinator check is the effective barrier. The seller's
+  // fromLeg claim (secret already public) and either refund are never blocked.
+  if (kind === "claim" && leg === s.roles.toLeg) {
+    const buried = (f, tgt, l) => f && !f.unconfirmed && (f.confs || 0) >= (tgt?.confs || MIN_CONFS[l]);
+    if (!buried(s.funding[s.roles.fromLeg], s.fromConfsTarget, s.roles.fromLeg) || !buried(s.funding[leg], s.confsTarget, leg))
+      throw new Error("both deposits must confirm to a safe depth before the swap can settle — try again shortly");
+  }
   const chain = chainOf(leg);
   const acc = await chain.testAccept(txHex);
   if (!acc.allowed) throw new Error(`rejected: ${acc.reason}`);
@@ -379,7 +406,7 @@ export function view(s, role) {
   return {
     id: s.id, role, state: s.state, terms: s.terms, direction: s.terms.direction, roles: s.roles,
     H: s.H, locktimes: s.locktimes, htlc: s.htlc, funding: s.funding, heights: s.heights,
-    confsTarget: s.confsTarget, refund: s.refund, feerates: { btc: cachedBtcFeerates(), qbit: cachedQbitFeerates() },
+    confsTarget: s.confsTarget, fromConfsTarget: s.fromConfsTarget, refund: s.refund, feerates: { btc: cachedBtcFeerates(), qbit: cachedQbitFeerates() },
     counterparty: s.party[role === "alice" ? "bob" : "alice"], self: s.party[role],
     counterpartyOnline: isOnline(s, role === "alice" ? "bob" : "alice"), selfOnline: isOnline(s, role),
     safetyNet: { self: !!s.finish?.[role], counterparty: !!s.finish?.[role === "alice" ? "bob" : "alice"] },

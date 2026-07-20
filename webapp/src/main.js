@@ -147,12 +147,14 @@ const coordPost = async (p, body) => { const r = await fetch(coordUrl(p), { meth
 async function init() {
   rerender = () => init();
   const q = parseHash();
-  if (q.coord && q.id && q.token) {
-    // Re-opened the invite link and we already hold this swap's keys → resume it (don't re-join with
-    // fresh keys, which the coordinator would reject as "already joined by someone else").
+  if (q.id) {
+    // We already hold this swap's keys (either party) → resume it, so a page refresh on the live status
+    // page returns to the swap instead of the landing. This covers both the creator's #id permalink and
+    // a re-opened invite link. Don't re-join with fresh keys — the coordinator rejects that as taken.
     const known = (await vault.list().catch(() => [])).includes(q.id);
     if (known) { try { return resumeSwap(await vault.load(q.id)); } catch { /* fall through to fresh join */ } }
-    return startParticipant({ coordinator: decodeURIComponent(q.coord), id: q.id, token: q.token });
+    // Not ours yet: a full invite link (coord+id+token) means we're the invited participant → join fresh.
+    if (q.coord && q.token) return startParticipant({ coordinator: decodeURIComponent(q.coord), id: q.id, token: q.token });
   }
   // The root URL always opens on the hero landing — even for a returning user. Any in-progress swaps
   // are still one click away: "Start a swap" → the chooser lists them, and the backup-recover card is there too.
@@ -363,15 +365,16 @@ function startPeer() {
 
 async function recoverCard(ids) {
   const card = h("div", { class: "card secondary" }, h("h2", {}, t("recoverTitle")), h("p", { class: "note" }, t("recoverBody")));
-  for (const id of ids) {
-    const s = await vault.load(id);
+  const active = [];
+  for (const id of ids) { const s = await vault.load(id).catch(() => null); if (s && !s.done) active.push([id, s]); }   // hide finished swaps
+  for (const [id, s] of active) {
     const label = (s.qbtSats != null && s.btcSats != null)
       ? t(s.role === "alice" ? "resumeBuy" : "resumeSell", { qbt: sats(s.qbtSats), btc: sats(s.btcSats) })
       : t("resumeBtn", { from: DIR[dirForRole(s.role)]?.from, to: DIR[dirForRole(s.role)]?.to, id: shorten(id, 6) });
     card.append(h("button", { class: "primary", style: "width:100%;margin-top:8px", onclick: () => resumeSwap(s) }, label));
   }
   const fileInput = h("input", { type: "file", accept: "application/json", style: "display:none", onchange: async (e) => { const f = e.target.files?.[0]; if (!f) return; try { resumeSwap(importBackup(await f.text())); } catch (err) { alert(t("errReadBackup", { msg: err.message })); } } });
-  card.append(fileInput, h("div", { class: "btns", style: "margin-top:10px" }, h("button", { style: "font-size:12.5px; padding:7px 12px", onclick: () => fileInput.click() }, ids.length ? t("uploadInstead") : t("uploadBackup"))));
+  card.append(fileInput, h("div", { class: "btns", style: "margin-top:10px" }, h("button", { style: "font-size:12.5px; padding:7px 12px", onclick: () => fileInput.click() }, active.length ? t("uploadInstead") : t("uploadBackup"))));
   return card;
 }
 
@@ -574,6 +577,15 @@ async function startParticipant({ coordinator, id, token }) {
     markScreen(null);
     return render(screen({ title: t("swapCanceled"), body: [h("p", { class: "note" }, v.canceled?.byYou ? t("cancelByYou") : t("cancelByCp"))] }));
   }
+  if (v.state === "COMPLETE" || v.state === "REFUNDED") {
+    // Reopened the invite link after the swap finished (in a browser without the saved keys) — show the
+    // final status read-only from the coordinator view, not the "you've been invited" join flow.
+    flow.client?.stop?.(); flow.client = null;
+    flow.role = v.role; flow.direction = dirForRole(v.role);
+    flow.btcSats = v.terms?.btcSats || 0; flow.qbtSats = v.terms?.qbtSats || 0; flow.feerates = v.feerates;
+    const card = h("div", { class: "card" });
+    markScreen(null); render(card); return renderLive(card, v);
+  }
   startJoinHeartbeat(coordinator, id, token);   // keep presence alive through the entering-info screens
   // Our role comes from the token (the coordinator knows which side it controls); our send/receive
   // orientation follows from it. A joiner may be the initiator (alice) if the creator was selling QBT.
@@ -606,6 +618,9 @@ function startLive() {
   liveCard = h("div", { class: "card" }, spinnerEl());
   render(liveCard);
   markScreen(null);   // swap is committed here — no Back handler, so the browser Back button won't drop you out of a live swap
+  // Stamp a token-free permalink (#id=…) so a refresh resumes from the vault instead of the landing —
+  // works for the creator too, who otherwise has a bare URL. replaceState doesn't fire hashchange.
+  if (flow.client?.id) history.replaceState(history.state, "", location.pathname + location.search + "#id=" + flow.client.id);
   rerender = () => { if (flow.client?.view) renderLive(liveCard, flow.client.view); };
   flow.client.onUpdate = (v) => renderLive(liveCard, v);
   flow.client.start();
@@ -618,11 +633,23 @@ const txLink = (leg, txid) => h("a", { href: EXPLORER[leg] + txid, target: "_bla
 // or just "X confirmations" for the other. ETA uses average mainnet block times.
 const AVG_BLOCK = { btc: 600, qbit: 60 };
 const etaCompact = (secs) => secs <= 0 ? "" : secs < 60 ? " · <1m" : secs < 3600 ? ` · ~${Math.round(secs / 60)}m` : ` · ~${Math.round(secs / 3600 * 10) / 10}h`;
+// The reorg-safe confirmation target for a leg: the claimed coin (toLeg) vs the funding coin (fromLeg,
+// which must bury before the preimage is revealed). 0 if this view carries no target for it.
+const legTarget = (v, leg) => ((leg === v.roles?.toLeg ? v.confsTarget?.confs : leg === v.roles?.fromLeg ? v.fromConfsTarget?.confs : 0) || 0);
+// A funding deposit is "buried" — safe to check off — only once it reaches that target (or is already
+// spent), not merely when it's detected in the mempool.
+function fundBuried(v, leg, fund) {
+  if (!fund) return false;
+  if (fund.spent) return true;
+  if (fund.unconfirmed || fund.height == null) return false;
+  const confs = Math.max(0, (v.heights?.[leg] || 0) - fund.height + 1);
+  return confs >= (legTarget(v, leg) || 1);
+}
 function confSub(v, leg, fund) {
   if (!fund || fund.unconfirmed || fund.height == null) return null;
   const confs = Math.max(0, (v.heights?.[leg] || 0) - fund.height + 1);
-  const target = v.confsTarget?.confs || 0;
-  if (!(leg === v.roles?.toLeg && target > 0)) return t("confCount", { confs });
+  const target = legTarget(v, leg);
+  if (!(target > 0)) return t("confCount", { confs });
   const remaining = Math.max(0, target - confs);
   return t("confLine", { confs, target }) + (remaining > 0 ? etaCompact(remaining * (AVG_BLOCK[leg] || 60)) : "");
 }
@@ -636,11 +663,14 @@ function swapTimeline(v, send, recv) {
   const myClaim = v.broadcasts?.[`${claimLeg}:claim`];      // the tx that delivers your received coin
   const myRefund = v.broadcasts?.[`${fundLeg}:refund`];     // your refund tx on abort
   const complete = v.state === "COMPLETE", refunded = v.state === "REFUNDED";
-  // Labels are tense-aware: future/present before a step happens, past once it's done.
+  // Labels are tense-aware: they flip to past tense once the deposit is SENT (`reached`), but the
+  // checkmark only fills once that deposit is BURIED to its required depth (`done`) — not merely seen in
+  // the mempool. So a funding step reads "You sent BTC · in mempool · 0 / 1 confirmations" with a hollow
+  // ring until it confirms, then fills. (`reached` defaults to `done` for steps without a funding tx.)
   const steps = [
     { label: () => t("tlMatched"), done: !!v.htlc },
-    { label: (d) => t(d ? "tlYouSent" : "tlYouSend", { coin: send }), done: !!myFund, leg: fundLeg, txid: myFund?.txid, mem: myFund?.unconfirmed, fund: myFund },
-    { label: (d) => t(d ? "tlCpSent" : "tlCpSend", { coin: recv }), done: !!cpFund, leg: claimLeg, txid: cpFund?.txid, mem: cpFund?.unconfirmed, fund: cpFund },
+    { label: (d) => t(d ? "tlYouSent" : "tlYouSend", { coin: send }), done: fundBuried(v, fundLeg, myFund), reached: !!myFund, leg: fundLeg, txid: myFund?.txid, mem: myFund?.unconfirmed, fund: myFund },
+    { label: (d) => t(d ? "tlCpSent" : "tlCpSend", { coin: recv }), done: fundBuried(v, claimLeg, cpFund), reached: !!cpFund, leg: claimLeg, txid: cpFund?.txid, mem: cpFund?.unconfirmed, fund: cpFund },
   ];
   if (refunded) steps.push({ label: () => t("tlRefunded", { coin: send }), done: !!myRefund, leg: fundLeg, txid: myRefund });
   else steps.push({ label: (d) => t(d ? "tlYouReceived" : "tlYouReceive", { coin: recv }), done: complete || !!myClaim, leg: claimLeg, txid: myClaim });
@@ -650,7 +680,7 @@ function swapTimeline(v, send, recv) {
     return h("div", { class: "tl-step " + state },
       h("span", { class: "tl-icon " + state }, s.done ? "✓" : ""),   // upcoming steps: a hollow ring (the border), no inner dot
       h("div", { class: "tl-body" },
-        h("span", { class: "tl-label" }, s.label(s.done)),
+        h("span", { class: "tl-label" }, s.label(s.reached ?? s.done)),
         s.txid ? h("span", { class: "tl-tx" }, s.mem ? h("span", { class: "tl-mem" }, t("tlMempool") + " · ") : null, txLink(s.leg, s.txid)) : null,
         s.fund ? ((c) => c ? h("span", { class: "tl-conf" }, c) : null)(confSub(v, s.leg, s.fund)) : null));
   }));
@@ -751,7 +781,10 @@ function renderLive(card, v) {
         try { await flow.client.cancel(); } catch (err) { alert(err.message); }
       } }, t("cancelSwap"))));
   }
-  if (terminal) vault.purge(v.id).catch(() => {});
+  // Keep the finished swap in the vault (marked done) rather than purging it, so reopening its link or
+  // permalink resumes straight to this final status instead of the join flow. It's filtered out of the
+  // "resume in-progress" list on the chooser.
+  if (terminal && flow.client && !flow._doneSaved) { flow._doneSaved = true; vault.save({ ...flow.client.secrets(), done: true }).catch(() => {}); }
 }
 function statusLine(v, send, recv) {
   const amCreator = flow.mode !== "join";     // I created/shared the swap (drives the "waiting to be joined" copy)
