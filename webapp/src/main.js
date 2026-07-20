@@ -639,7 +639,7 @@ function goHome() {
   Object.assign(flow, { mode: null, direction: null, btcSats: 0, qbtSats: 0, receiveAddr: "", refundAddr: "", client: null, bobLink: null, _recoverySaved: false });
   liveGuard = { risky: false };
   if (location.hash) history.replaceState(null, "", location.pathname + location.search);
-  init();
+  stepWelcome();   // always return to the hero landing, not the direction chooser
 }
 for (const sel of ["header .mark", "header h1"]) document.querySelector(sel)?.addEventListener("click", goHome);
 document.querySelector("#info-link")?.addEventListener("click", (e) => { e.preventDefault(); stepInfo(); });
