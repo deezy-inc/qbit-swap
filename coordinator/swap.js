@@ -352,8 +352,9 @@ export function submitFinish(s, role, bundle) {
 }
 const splicePreimage = (txHex, preimageHex) => { const tx = parseTx(bin(txHex)); tx.wit[0][1] = bin(preimageHex); return hex(serializeTx(tx)); };
 // Pick the cheapest pre-signed tier whose feerate beats the current mempool fastest fee (BTC); qbit or
-// no fee data -> the lowest tier. `minIndex` lets escalation start above a previously-broadcast tier.
-async function pickTier(leg, tiers, minIndex = 0) {
+// no fee data -> the lowest tier. `minIndex` floors the choice so a re-send never downgrades below the
+// tier already used. Exported for the fee-ladder unit test.
+export async function pickTier(leg, tiers, minIndex = 0) {
   if (leg !== "btc") return minIndex;
   const target = (await btcFeerates()).fastestFee || 1;
   for (let i = minIndex; i < tiers.length; i++) if (tiers[i].feerate >= target) return i;
@@ -368,9 +369,10 @@ async function wtSend(s, role, leg, kind, txHex, tier) {
   await applyEffects(s, leg, kind, txid);
   return true;
 }
-async function wtClaim(s, role, leg, minTier = 0) {
+// Broadcast a party's pre-signed claim at a specific ladder tier (splicing in the now-public preimage
+// for the participant's version). The caller chooses the tier from the live fastest-fee target.
+async function wtClaim(s, role, leg, tier) {
   const b = s.finish[role].claim;                 // { leg, needsPreimage, tiers:[{feerate,tx}] }
-  const tier = await pickTier(leg, b.tiers, minTier);
   const txHex = b.needsPreimage ? splicePreimage(b.tiers[tier].tx, s.preimage) : b.tiers[tier].tx;
   return wtSend(s, role, leg, "claim", txHex, tier);
 }
@@ -384,19 +386,29 @@ export async function driveWatchtower(s) {
   const away = (role) => !isOnline(s, role);   // only step in for a party that has left
 
   // a) offline initiator's claim of toLeg once matured -> reveals the preimage on-chain
-  if (s.state === "CLAIMABLE" && away("alice") && s.finish.alice?.claim && unspent(toLeg) && !s.wt["alice:claim"]) await wtClaim(s, "alice", toLeg);
+  if (s.state === "CLAIMABLE" && away("alice") && s.finish.alice?.claim && unspent(toLeg) && !s.wt["alice:claim"]) await wtClaim(s, "alice", toLeg, await pickTier(toLeg, s.finish.alice.claim.tiers));
   // b) offline participant's claim of fromLeg once the preimage is public (spliced in)
-  if (s.preimage && away("bob") && s.finish.bob?.claim && unspent(fromLeg) && !s.wt["bob:claim"]) await wtClaim(s, "bob", fromLeg);
+  if (s.preimage && away("bob") && s.finish.bob?.claim && unspent(fromLeg) && !s.wt["bob:claim"]) await wtClaim(s, "bob", fromLeg, await pickTier(fromLeg, s.finish.bob.claim.tiers));
   // c) abort refunds after each leg's timelock (only while no preimage — else the claim path applies)
   if (!s.preimage && s.locktimes) {
     if (away("alice") && s.finish.alice?.refund && unspent(fromLeg) && (H[fromLeg] || 0) >= s.locktimes[fromLeg] && !s.wt["alice:refund"]) await wtSend(s, "alice", fromLeg, "refund", s.finish.alice.refund.tx, "r");
     if (away("bob") && s.finish.bob?.refund && unspent(toLeg) && (H[toLeg] || 0) >= s.locktimes[toLeg] && !s.wt["bob:refund"]) await wtSend(s, "bob", toLeg, "refund", s.finish.bob.refund.tx, "r");
   }
-  // d) fee escalation: if a broadcast claim fell out of the mempool (leg unspent again) and a higher
-  //    tier exists, bump to it (full-RBF is the network default, so no RBF signaling is needed).
+  // d) Fee management for the watchtower's own claims. We (re)broadcast ONLY when the funding is
+  //    genuinely unspent ON-CHAIN (mempool included) — i.e. no claim is in flight or mined, whether ours
+  //    (dropped/evicted) or the party's OWN out-of-band tx (their backup file, their node, the BTC
+  //    direct-broadcast fallback). We never RBF a claim already in the mempool: it may be the party's,
+  //    and trampling it is worse than waiting out the (generous) timelock; a genuinely underpriced tx
+  //    gets evicted under fee pressure → funding unspent → re-sent here. The re-send follows the LIVE
+  //    fastest-fee recommendation, floored at the tier last used — so a drop for a non-fee reason
+  //    re-sends the same tier, a fee spike steps it up. testAccept no-ops it if nothing needs changing.
   for (const [role, leg] of [["alice", toLeg], ["bob", fromLeg]]) {
-    const rec = s.wt[`${role}:claim`], b = s.finish[role]?.claim;
-    if (rec && b && away(role) && unspent(leg) && rec.tier < b.tiers.length - 1) { s.wt[`${role}:claim`] = null; await wtClaim(s, role, leg, rec.tier + 1); }
+    const rec = s.wt[`${role}:claim`], b = s.finish[role]?.claim, f = s.funding[leg];
+    if (!rec || !b || !away(role) || !f) continue;
+    if (!(await chainOf(leg).isUnspent(f.txid, f.vout))) continue;   // a claim (ours or theirs) is in the mempool/chain → don't interfere
+    const tier = Math.max(rec.tier, await pickTier(leg, b.tiers));   // live fastest-fee tier, never downgraded
+    s.wt[`${role}:claim`] = null;
+    if (!(await wtClaim(s, role, leg, tier))) s.wt[`${role}:claim`] = rec;   // couldn't re-send (e.g. mined between ticks) → keep the record
   }
   touch(s);
 }

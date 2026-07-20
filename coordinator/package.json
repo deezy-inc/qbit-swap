@@ -4,7 +4,7 @@
   "description": "",
   "main": "chain.js",
   "scripts": {
-    "test": "node esplora.test.mjs",
+    "test": "node esplora.test.mjs && node wtfee.test.mjs",
     "start": "node server.js"
   },
   "keywords": [],
