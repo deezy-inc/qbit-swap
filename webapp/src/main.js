@@ -77,9 +77,33 @@ function h(tag, attrs = {}, ...kids) {
 }
 const render = (node) => { while (appEl.firstChild) appEl.removeChild(appEl.firstChild); appEl.append(node); };
 
+// ── browser history: the native Back button mirrors the on-page "Back" ─────────
+// This is a single-page app, but people reach for the browser Back button anyway. Every screen
+// registers its Back action via markScreen(); the on-page Back link just calls history.back(), so
+// both routes pop the same stack. Forward navigation pushes a state; going back runs the current
+// screen's Back handler, which re-renders the previous screen (suppressed so it doesn't re-push).
+let curBack = null, histSeq = 0, histPos = 0, histSuppress = false;
+function markScreen(back) {
+  curBack = typeof back === "function" ? back : null;
+  if (histSuppress) return;              // rendering because of a back-nav or a lang re-render — don't push
+  if (histSeq === 0) { histSeq = histPos = 1; history.replaceState({ pos: 1 }, ""); }   // first screen: replace, so Back off it leaves the app
+  else { histPos = ++histSeq; history.pushState({ pos: histPos }, ""); }
+}
+window.addEventListener("popstate", (e) => {
+  const target = e.state?.pos ?? 0;
+  if (target < histPos && curBack) {     // going back one or more screens
+    histPos = target;
+    histSuppress = true;
+    try { curBack(); } finally { histSuppress = false; }
+  } else {
+    histPos = target;                    // at the root, or a forward hop we can't reconstruct — leave the view as-is
+  }
+});
+
 function screen({ title, subtitle, body = [], cta, onCta, secondary, back }) {
+  markScreen(back);
   const btn = cta ? h("button", { class: "primary", style: "width:100%;margin-top:18px", onclick: async (e) => { const b = e.target; b.disabled = true; try { await onCta(); } catch (err) { b.disabled = false; alert(err.message); } } }, cta) : null;
-  const backLink = back ? h("a", { href: "#", style: "color:var(--mut)", onclick: (e) => { e.preventDefault(); back(); } }, t("back")) : null;
+  const backLink = back ? h("a", { href: "#", style: "color:var(--mut)", onclick: (e) => { e.preventDefault(); history.back(); } }, t("back")) : null;
   const footer = (backLink || secondary) ? h("div", { style: "margin-top:14px;display:flex;justify-content:space-between;align-items:center;gap:12px" }, backLink || h("span"), secondary || h("span")) : null;
   return h("div", { class: "card" }, h("h2", {}, title), subtitle ? h("p", { class: "note", style: "margin-top:-4px" }, subtitle) : null, ...body, btn, footer);
 }
@@ -134,6 +158,7 @@ const EMBLEM_SVG = `<svg viewBox="0 0 320 320" aria-hidden="true"><path class="c
 // Landing page — hero + call-to-action + value props.
 function stepWelcome() {
   rerender = stepWelcome;
+  markScreen(null);   // root screen — Back off the landing leaves the app
   const feature = (n) => h("div", { class: "feature" },
     h("div", { class: "flabel" }, h("span", { class: "fdot" }), t("feat" + n)),
     h("p", {}, t("feat" + n + "d")));
@@ -190,6 +215,9 @@ function stepInfo() {
   const faq = (q, a) => h("div", { style: "margin-top:16px" },
     h("div", { style: "font-weight:600;color:var(--ink)" }, t(q)),
     h("p", { class: "note", style: "margin-top:3px" }, t(a)));
+  const tech = (n) => h("div", { style: "margin-top:14px" },
+    h("div", { style: "font-weight:600;color:var(--ink)" }, t("tech" + n + "l")),
+    h("p", { class: "note", style: "margin-top:3px" }, t("tech" + n + "d")));
   render(screen({
     title: t("infoHowTitle"),
     body: [
@@ -198,6 +226,8 @@ function stepInfo() {
       h("h2", { style: "margin:24px 0 0" }, t("infoFaqTitle")),
       faq("faqCustodialQ", "faqCustodialA"), faq("faqStallQ", "faqStallA"), faq("faqHowLongQ", "faqHowLongA"),
       faq("faqFindQ", "faqFindA"), faq("faqFeesQ", "faqFeesA"), faq("faqWalletQ", "faqWalletA"), faq("faqBackupQ", "faqBackupA"),
+      h("h2", { style: "margin:24px 0 0" }, t("techTitle")),
+      tech(1), tech(2), tech(3), tech(4), tech(5), tech(6), tech(7), tech(8),
     ],
     back: () => { rerender = _prevView || (() => init()); rerender(); },
   }));
@@ -327,7 +357,7 @@ function stepConfirm() {
         h("a", { href: "https://discord.gg/xqC7MAk95Q", target: "_blank", rel: "noopener" }, t("confirmDiscordLink")),
         t("confirmDiscordPost")),
     ],
-    cta: t("confirmCta"), onCta: () => stepAmount(), back: () => (ORDERBOOK ? showMarket(flow.direction) : init()),
+    cta: t("confirmCta"), onCta: () => stepAmount(), back: () => (ORDERBOOK ? showMarket(flow.direction) : stepChoose()),
   }));
 }
 
@@ -452,6 +482,7 @@ async function doJoin() {
 
 function stepBackup(next) {
   rerender = () => stepBackup(next);
+  markScreen(null);
   let downloaded = false;
   const cont = h("button", { class: "primary", style: "width:100%;margin-top:16px", disabled: true, onclick: () => next() }, t("continue"));
   const chk = h("input", { type: "checkbox", style: "width:auto;margin:2px 9px 0 0;flex:0 0 auto", onchange: () => { cont.disabled = !(downloaded && chk.checked); } });
@@ -512,6 +543,7 @@ function startLive() {
   flow.client.stop();   // idempotent: safe if we came back from the share screen and re-enter
   liveCard = h("div", { class: "card" }, h("span", { class: "muted" }, "…"));
   render(liveCard);
+  markScreen(null);   // swap is committed here — no Back handler, so the browser Back button won't drop you out of a live swap
   rerender = () => { if (flow.client?.view) renderLive(liveCard, flow.client.view); };
   flow.client.onUpdate = (v) => renderLive(liveCard, v);
   flow.client.start();
@@ -629,7 +661,7 @@ function renderChrome() {
   while (el.firstChild) el.removeChild(el.firstChild);
   for (const [code, label] of LANGS) {
     el.append(h("a", { href: "#", "aria-current": getLang() === code ? "true" : "false",
-      onclick: (e) => { e.preventDefault(); if (getLang() !== code) { setLang(code); renderChrome(); rerender(); } } }, label));
+      onclick: (e) => { e.preventDefault(); if (getLang() !== code) { setLang(code); renderChrome(); histSuppress = true; try { rerender(); } finally { histSuppress = false; } } } }, label));
   }
 }
 
