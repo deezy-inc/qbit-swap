@@ -778,6 +778,9 @@ function syncLangUrl() {
   history.replaceState(history.state, "", u.pathname + u.search + u.hash);
 }
 
+// A fresh invite link pasted into an ALREADY-OPEN tab only changes the URL hash (no page reload), so
+// the initial init() never sees it. Re-enter the flow on hashchange when the new hash is an invite.
+window.addEventListener("hashchange", () => { const q = parseHash(); if (q.coord && q.id && q.token) init(); });
 renderChrome();
 init();
 syncLangUrl();

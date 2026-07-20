@@ -247,6 +247,16 @@ const BADGE={CREATED:"b-created",READY:"b-created",FROM_FUNDED:"b-fund",TO_FUNDE
 const badge=(st)=>'<span class="badge '+(BADGE[st]||"b-created")+'">'+st+'</span>';
 const dd=(on)=>'<span class="dot '+(on?"on":"off")+'"></span>';
 let SWAPS=new Map(), FILTER=null, Q="";
+// Sortable swaps table: [header label, sort key]; getters return a comparable value per column.
+const SWAP_COLS=[["id","id"],["dir","dir"],["state","state"],["BTC","btc"],["QBT","qbt"],["funded","funded"],["parties","parties"],["armed","armed"],["age","created"],["settled","settled"]];
+const SORT_GET={id:s=>s.id||"",dir:s=>s.direction||"",state:s=>s.state||"",btc:s=>s.btcSats||0,qbt:s=>s.qbtSats||0,
+  funded:s=>(s.funded&&s.funded.btc?1:0)+(s.funded&&s.funded.qbit?1:0),
+  parties:s=>(s.online&&s.online.alice?1:0)+(s.online&&s.online.bob?1:0),
+  armed:s=>(s.armed&&s.armed.alice?1:0)+(s.armed&&s.armed.bob?1:0),
+  created:s=>s.createdAt||0, settled:s=>s.settledAt||0};
+let SORT={key:"created",dir:-1};   // default: newest first
+const swapHeadHtml=()=>'<tr>'+SWAP_COLS.map(([label,key])=>'<th onclick="setSort(\\''+key+'\\')" style="cursor:pointer;user-select:none" title="click to sort">'+label+(SORT.key===key?' '+(SORT.dir<0?'▼':'▲'):'')+'</th>').join("")+'</tr>';
+window.setSort=(k)=>{if(SORT.key===k)SORT.dir=-SORT.dir;else SORT={key:k,dir:(k==="id"||k==="dir"||k==="state")?1:-1};const h=$("#swhead");if(h)h.innerHTML=swapHeadHtml();renderRows();};
 
 function gate(){
   $("#app").innerHTML='<div class="gate"><h2>admin token</h2><input id="tk" type="password" placeholder="paste ADMIN_TOKEN"/><br><button onclick="sv()">enter</button></div>';
@@ -278,10 +288,11 @@ function renderShell(cards){
   if($("#cards")){$("#cards").innerHTML=cards;renderChips();return;}
   $("#app").innerHTML='<div class="cards" id="cards">'+cards+'</div>'
     +'<div class="row"><div class="chips" id="chips"></div><input class="search" id="q" placeholder="filter by id / state"/></div>'
-    +'<table><thead><tr><th>id</th><th>dir</th><th>state</th><th>BTC</th><th>QBT</th><th>funded</th><th>parties</th><th>armed</th><th>age</th><th>settled</th></tr></thead><tbody id="rows"></tbody></table>'
+    +'<table><thead id="swhead"></thead><tbody id="rows"></tbody></table>'
     +'<div class="row" style="margin-top:24px"><b>watchtower actions</b> <span class="mut" id="wtcount"></span><span class="mut" style="font-weight:400"> — txs the coordinator broadcast for an offline party</span></div>'
     +'<table><thead><tr><th>when</th><th>swap</th><th>party</th><th>action</th><th>leg</th><th>feerate</th><th>txid</th></tr></thead><tbody id="wtrows"></tbody></table>'
     +'<div id="log"><div class="row" style="margin-top:24px"><b>activity</b></div><div id="loglines"></div></div>';
+  $("#swhead").innerHTML=swapHeadHtml();
   $("#q").oninput=(e)=>{Q=e.target.value.trim().toLowerCase();renderRows()};
   renderChips();
 }
@@ -314,7 +325,8 @@ function renderRows(){
   if(FILTER==="@risk")list=list.filter(s=>s.risk&&s.risk.length);
   else if(FILTER)list=list.filter(s=>s.state===FILTER);
   if(Q)list=list.filter(s=>s.id.toLowerCase().includes(Q)||s.state.toLowerCase().includes(Q)||(s.direction||"").includes(Q));
-  list.sort((a,b)=>(b.createdAt||0)-(a.createdAt||0));
+  const g=SORT_GET[SORT.key]||SORT_GET.created;
+  list.sort((a,b)=>{const x=g(a),y=g(b);return (x<y?-1:x>y?1:0)*SORT.dir;});
   const tb=$("#rows");if(!tb)return;
   tb.innerHTML=list.length?list.map(rowHtml).join(""):'<tr><td colspan="10" class="empty">no swaps</td></tr>';
 }
