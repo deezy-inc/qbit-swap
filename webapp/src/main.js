@@ -11,6 +11,9 @@ import { addressToScriptPubKey, addressCoin } from "@qbit-swap/client";
 // window.QBIT_HRPS = { btc: "bc", qbit: "qb" } (testnet: "tb" / a qbit testnet hrp).
 const HRPS = globalThis.QBIT_HRPS || { btc: "bcrt", qbit: "qbrt" };
 const KNOWN_HRPS = ["bcrt", "bc", "tb", "sb", "qbrt", "qbt", "tqb", "qb"];
+// All SwapClients get the BTC network (hrp) so they can fall back to a direct public broadcast of the
+// BTC leg if the coordinator is unreachable while the tab is open (see swapflow.js #send).
+const mkClient = (opts) => new SwapClient({ btcHrp: HRPS.btc, ...opts });
 // Is `addr` on the specific network `expectedHrp`? bech32 by hrp; btc legacy base58 by mainnet-vs-test.
 function addressOnNetwork(addr, expectedHrp) {
   const a = addr.trim(), l = a.toLowerCase(), sep = l.lastIndexOf("1");
@@ -325,7 +328,7 @@ function stepTakeConfirm() {
   }));
 }
 async function doTake() {
-  flow.client = new SwapClient({ coordinator: flow.coordinator || DEFAULT_COORD });
+  flow.client = mkClient({ coordinator: flow.coordinator || DEFAULT_COORD });
   await flow.client.enter({ id: flow.takeSwapId, token: flow.takeToken, direction: flow.direction, role: "alice", ...destsForClient() });
   await vault.save(flow.client.secrets());
   stepBackup(() => startLive());
@@ -471,14 +474,14 @@ function destsForClient() {
   return { btcDest: addrForCoin("BTC"), qbitDest: addrForCoin("QBT") };
 }
 async function doCreate() {
-  flow.client = new SwapClient({ coordinator: flow.coordinator });
+  flow.client = mkClient({ coordinator: flow.coordinator });
   const res = await flow.client.create({ direction: flow.direction, btcSats: flow.btcSats, qbtSats: flow.qbtSats, securityLevel: "high", ...destsForClient() });
   flow.bobLink = res.bobLink;
   await vault.save(flow.client.secrets());
   stepBackup(() => stepShare());
 }
 async function doJoin() {
-  flow.client = new SwapClient({ coordinator: flow.coordinator });
+  flow.client = mkClient({ coordinator: flow.coordinator });
   try {
     await flow.client.join({ id: flow.joinId, token: flow.joinToken, ...destsForClient() });
   } catch (e) {
@@ -646,7 +649,7 @@ function statusLine(v, send, recv) {
 function resumeSwap(secrets) {
   flow.mode = secrets.role === "alice" ? "create" : "join";
   flow.direction = secrets.direction; flow.coordinator = secrets.coordinator;
-  flow.client = new SwapClient({ coordinator: secrets.coordinator }).restore(secrets);
+  flow.client = mkClient({ coordinator: secrets.coordinator }).restore(secrets);
   startLive();
 }
 

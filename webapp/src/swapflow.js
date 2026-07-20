@@ -17,11 +17,14 @@ import {
 const rand = (n) => globalThis.crypto.getRandomValues(new Uint8Array(n));
 
 export class SwapClient {
-  constructor({ coordinator, onUpdate = () => {}, feeSats = { qbit: 100000, btc: 5000 } }) {
+  constructor({ coordinator, onUpdate = () => {}, feeSats = { qbit: 100000, btc: 5000 }, btcHrp = "bc" }) {
     this.base = coordinator.replace(/\/$/, "");
     this.onUpdate = onUpdate;
     this.feeSats = feeSats;
     this.acted = new Set();
+    // Direct-broadcast fallback for the BTC leg (see #send): public endpoints keyed by network. Qbit
+    // has no public node, so only the coordinator can relay QBT. Regtest/unknown → no fallback.
+    this.btcBroadcast = BTC_BROADCAST[btcHrp] || [];
   }
 
   // Retries transient failures (network drop, coordinator restart/blip, 5xx/429) so an in-flight
@@ -164,7 +167,28 @@ export class SwapClient {
       if (v.refund?.[refund]?.available && !v.preimage && !done(`${refund}:refund`)) return this.#refund(v, refund);
     }
   }
-  #send(leg, kind, tx) { this.acted.add(`${leg}:${kind}`); return this.#api(`/swaps/${this.id}/broadcast`, { token: this.token, method: "POST", body: { leg, kind, tx: hex(tx) } }); }
+  // Broadcast a signed claim/refund. Primary path is the coordinator (it relays to both chains' nodes
+  // and updates its view). If the coordinator is unreachable, the BTC leg can still be pushed to the
+  // network directly via public broadcast APIs — so a backend outage never traps your Bitcoin
+  // claim/refund while this tab is open. (QBT has no public node; only the coordinator can relay it.)
+  async #send(leg, kind, tx) {
+    const key = `${leg}:${kind}`, txHex = hex(tx);
+    this.acted.add(key);   // guard against a duplicate fire on the next tick while this send is in flight
+    try {
+      return await this.#api(`/swaps/${this.id}/broadcast`, { token: this.token, method: "POST", body: { leg, kind, tx: txHex } });
+    } catch (e) {
+      if (leg === "btc" && this.btcBroadcast.length) {
+        try {
+          const txid = await this.#broadcastDirect(txHex);
+          this.onUpdate({ ...this.view, broadcastFallback: { leg, kind, txid } });   // surface that we bypassed the coordinator
+          return { fallback: true, txid };
+        } catch (fe) { this.acted.delete(key); throw fe; }
+      }
+      this.acted.delete(key);   // total failure — let #act retry this leg on the next update
+      throw e;
+    }
+  }
+  #broadcastDirect(txHex) { return postRawTx(this.btcBroadcast, txHex); }
 
   // ── watchtower safety net: pre-sign and upload a fee-ladder claim + a refund ──
   async armSafetyNet(v) {
@@ -231,6 +255,27 @@ export class SwapClient {
 // picks/escalates tiers using live feerates when it must act for an offline party. BTC spans
 // economy→extreme; Qbit is uncongested so a low pair suffices.
 const DUST = 546;
+// Public BTC broadcast endpoints for the coordinator-down fallback (#send), keyed by the BTC hrp
+// (network). They accept a raw tx hex as the POST body and return the txid. Qbit has no equivalent
+// public node, so there is no QBT fallback. Regtest ("bcrt") has no public endpoint → empty (disabled).
+export const BTC_BROADCAST = {
+  bc: ["https://mempool.space/api/tx", "https://blockstream.info/api/tx"],
+  tb: ["https://mempool.space/testnet4/api/tx", "https://blockstream.info/testnet/api/tx"],
+};
+// POST a raw tx hex to each endpoint in turn; return the first accepted txid, or throw if none accept.
+// Injectable fetch for testing. Used by the coordinator-down BTC broadcast fallback.
+export async function postRawTx(endpoints, txHex, fetchImpl = fetch) {
+  let lastErr;
+  for (const url of endpoints) {
+    try {
+      const r = await fetchImpl(url, { method: "POST", headers: { "content-type": "text/plain" }, body: txHex });
+      const body = (await r.text()).trim();
+      if (r.ok) return body;                                   // the txid
+      lastErr = new Error(`${url} -> ${r.status} ${body.slice(0, 100)}`);
+    } catch (e) { lastErr = e; }
+  }
+  throw lastErr || new Error("no reachable broadcast endpoint");
+}
 const LADDER = { btc: [2, 8, 25, 75, 200], qbit: [1, 5] };
 // vsize per sweep (measured on regtest). IMPORTANT: Qbit's SLH-DSA witness gets NO segwit discount
 // (vsize == weight ≈ 3.9k vB), so these must be the real sizes — a low estimate underpays the feerate
