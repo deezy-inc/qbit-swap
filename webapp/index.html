@@ -42,7 +42,7 @@
   .mark svg { width:27px; height:27px; display:block; }
   header h1 { font-size:15px; font-weight:650; margin:0; letter-spacing:-.01em; cursor:pointer; }
   header .tag { color:var(--mut); font-size:12.5px; margin-left:2px; }
-  @media (max-width:560px){ header .tag { display:none; } }
+  @media (max-width:560px){ header .tag, header h1 { display:none; } }   /* mobile: drop the wordmark, keep the logo (still clickable → home) */
   .navlink { color:var(--mut); font-size:13px; font-weight:550; cursor:pointer; text-decoration:none; }
   .navlink:hover { color:var(--ink); }
   #info-link { margin-left:auto; }   /* anchors the right-hand nav group; trades-link takes over when shown */
