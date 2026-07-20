@@ -400,30 +400,39 @@ function stepAmount() {
   const btcIn = send === "BTC" ? sendIn : recvIn;   // which input holds BTC / QBT (direction-independent)
   const qbtIn = send === "BTC" ? recvIn : sendIn;
 
-  // Price helper: shows $ (or ₿) per QBT, kept in sync with the amounts. Editing it adjusts the BTC
-  // amount so the price matches (QBT fixed). A toggle switches the unit; BTCUSD is the cached CoinGecko rate.
+  // Price helper: shows $ (or ₿) per QBT. QBT, BTC and price are three linked fields; whichever you
+  // edited least recently is the one we recompute, so editing any two keeps them and the third follows
+  // (a standard 3-field calculator). A toggle switches the unit; BTCUSD is the cached CoinGecko rate.
   const unitKey = () => (priceMode === "usd" ? "priceUsd" : "priceBtc");
   const priceIn = field(t(unitKey()));
-  const unitBtn = h("button", { type: "button", class: "copy", onclick: () => { priceMode = priceMode === "usd" ? "btc" : "usd"; unitBtn.textContent = t(unitKey()); priceIn.placeholder = t(unitKey()); syncPrice(); } }, t(unitKey()));
   const num = (el) => { const n = parseFloat(el.value); return isFinite(n) && n > 0 ? n : 0; };
   const trim = (n) => n.toFixed(8).replace(/0+$/, "").replace(/\.$/, "");
   let usd = 0;
-  function syncPrice() {            // amounts → price field
-    const b = num(btcIn), q = num(qbtIn);
-    if (!b || !q) { priceIn.value = ""; return; }
-    const btcPerQbt = b / q;
-    priceIn.value = priceMode === "usd" ? (usd ? (btcPerQbt * usd).toFixed(4) : "") : trim(btcPerQbt);
+  const bpqFromPrice = () => { const p = num(priceIn); return priceMode === "usd" ? (usd ? p / usd : 0) : p; };  // price field → BTC-per-QBT
+  let order = ["qbt", "btc", "price"];   // most-recently-edited first; order[2] (price, initially) is recomputed
+  function recompute() {
+    const target = order[2];
+    if (target === "price") {
+      const b = num(btcIn), q = num(qbtIn);
+      priceIn.value = (!b || !q) ? "" : (priceMode === "usd" ? (usd ? (b / q * usd).toFixed(4) : "") : trim(b / q));
+    } else if (target === "btc") {
+      const q = num(qbtIn), bpq = bpqFromPrice();
+      if (q && bpq) btcIn.value = trim(bpq * q);
+    } else {   // qbt
+      const b = num(btcIn), bpq = bpqFromPrice();
+      if (b && bpq) qbtIn.value = trim(b / bpq);
+    }
   }
-  function applyPrice() {           // price field → BTC amount (QBT fixed)
-    const p = num(priceIn), q = num(qbtIn);
-    if (!p || !q) return;
-    const btcPerQbt = priceMode === "usd" ? (usd ? p / usd : 0) : p;
-    if (btcPerQbt) btcIn.value = trim(btcPerQbt * q);
-  }
-  sendIn.oninput = recvIn.oninput = syncPrice;
-  priceIn.oninput = applyPrice;
-  btcUsdPrice().then((u) => { usd = u; if (priceMode === "usd") syncPrice(); });
-  syncPrice();
+  const touch = (fieldId) => { order = [fieldId, ...order.filter((x) => x !== fieldId)]; recompute(); };
+  const unitBtn = h("button", { type: "button", class: "copy", onclick: () => {
+    priceMode = priceMode === "usd" ? "btc" : "usd"; unitBtn.textContent = t(unitKey()); priceIn.placeholder = t(unitKey());
+    order = [...order.filter((x) => x !== "price"), "price"]; recompute();   // re-derive the shown price from the amounts in the new unit
+  } }, t(unitKey()));
+  qbtIn.oninput = () => touch("qbt");
+  btcIn.oninput = () => touch("btc");
+  priceIn.oninput = () => touch("price");
+  btcUsdPrice().then((u) => { usd = u; recompute(); });
+  recompute();
 
   render(screen({
     title: t("howMuch"),
