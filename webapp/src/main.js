@@ -661,7 +661,7 @@ function renderChrome() {
   while (el.firstChild) el.removeChild(el.firstChild);
   for (const [code, label] of LANGS) {
     el.append(h("a", { href: "#", "aria-current": getLang() === code ? "true" : "false",
-      onclick: (e) => { e.preventDefault(); if (getLang() !== code) { setLang(code); renderChrome(); histSuppress = true; try { rerender(); } finally { histSuppress = false; } } } }, label));
+      onclick: (e) => { e.preventDefault(); if (getLang() !== code) { setLang(code); syncLangUrl(); renderChrome(); histSuppress = true; try { rerender(); } finally { histSuppress = false; } } } }, label));
   }
 }
 
@@ -680,5 +680,14 @@ if (RECENT_TRADES) {
   if (tl) { tl.style.display = ""; tl.style.marginLeft = "auto"; if (il) il.style.marginLeft = "0"; tl.addEventListener("click", (e) => { e.preventDefault(); stepTrades(); }); }
 }
 
+// Reflect the active language in the address bar so a copied/shared link carries it (zh → ?lang=zh;
+// English stays a clean URL). Preserves the nav-history state and the invite hash.
+function syncLangUrl() {
+  const u = new URL(location.href);
+  if (getLang() === "en") u.searchParams.delete("lang"); else u.searchParams.set("lang", getLang());
+  history.replaceState(history.state, "", u.pathname + u.search + u.hash);
+}
+
 renderChrome();
 init();
+syncLangUrl();

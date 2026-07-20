@@ -320,7 +320,13 @@ const DICTS = { en, zh };
 export const LANGS = [["en", "EN"], ["zh", "中文"]];
 
 let lang = "en";
-try { lang = localStorage.getItem("qbit-swap-lang") || (navigator.language?.startsWith("zh") ? "zh" : "en"); } catch {}
+// Precedence: ?lang= in the URL (shareable — a link carries its language) > saved choice > browser locale.
+try {
+  const urlLang = new URLSearchParams(location.search).get("lang");
+  lang = (urlLang && DICTS[urlLang] ? urlLang : null)
+    || localStorage.getItem("qbit-swap-lang")
+    || (navigator.language?.startsWith("zh") ? "zh" : "en");
+} catch {}
 
 export const getLang = () => lang;
 export function setLang(l) { lang = DICTS[l] ? l : "en"; try { localStorage.setItem("qbit-swap-lang", lang); } catch {} }

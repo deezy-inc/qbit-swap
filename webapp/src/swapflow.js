@@ -96,7 +96,12 @@ export class SwapClient {
     if (this.role === "alice") body.H = hex(this.H);
     return this.#api(`/swaps/${this.id}/party`, { token: this.token, method: "POST", body });
   }
-  link(bobToken) { const l = globalThis.location; return `${l?.origin || ""}${l?.pathname || ""}#coord=${encodeURIComponent(this.base)}&id=${this.id}&token=${bobToken}`; }
+  link(bobToken) {
+    const l = globalThis.location;
+    const lang = l?.search ? new URLSearchParams(l.search).get("lang") : null;   // carry the sharer's language into the invite link
+    const q = lang ? `?lang=${encodeURIComponent(lang)}` : "";
+    return `${l?.origin || ""}${l?.pathname || ""}${q}#coord=${encodeURIComponent(this.base)}&id=${this.id}&token=${bobToken}`;
+  }
 
   // ── live drive ────────────────────────────────────────────────────────────────
   start() {
