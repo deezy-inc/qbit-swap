@@ -147,7 +147,8 @@ export function createSwap({ btcSats, qbtSats, securityLevel = "high", direction
   if (direction !== "btc2qbt" && direction !== "qbt2btc") throw new Error("bad direction");
   // Reject dust-level swaps: the amount must comfortably exceed claim/refund fees (incl. the top
   // watchtower fee tier) or the spend would produce a dust/negative output.
-  if (!(btcSats >= MIN_SATS.btc) || !(qbtSats >= MIN_SATS.qbit)) throw new Error(`amount too small (min ${MIN_SATS.btc} btc / ${MIN_SATS.qbit} qbt sats)`);
+  const minAmt = (n) => (n / 1e8).toFixed(8).replace(/\.?0+$/, "");   // sats → BTC/QBT decimal, no trailing zeros
+  if (!(btcSats >= MIN_SATS.btc) || !(qbtSats >= MIN_SATS.qbit)) throw new Error(`amount too small (minimum ${minAmt(MIN_SATS.btc)} BTC and ${minAmt(MIN_SATS.qbit)} QBT)`);
   const s = {
     id: token(), tokens: { alice: token(), bob: token() },
     terms: { btcSats, qbtSats, securityLevel, direction },
