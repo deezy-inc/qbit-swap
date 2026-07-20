@@ -212,60 +212,66 @@ async function stepChoose(resumable) {
   ));
 }
 
-// Info / how-it-works + FAQ (reached from the header tab; Back returns to where you were).
+// Header for a full-width content page (Info / Activity): big title + a Back link that drives history.
+const pageHead = (title, back) => h("div", { class: "page-head" },
+  h("h1", {}, title),
+  back ? h("a", { class: "page-back", href: "#", onclick: (e) => { e.preventDefault(); history.back(); } }, t("back")) : null);
+
+// Info / how-it-works + FAQ + technical details — a wide, landing-style page (reached from the header
+// tab; Back returns to where you were).
 let _prevView = null;
 function stepInfo() {
   if (rerender !== stepInfo) _prevView = rerender;
   rerender = stepInfo;
-  const step = (n, k) => h("div", { class: "note", style: "display:flex;gap:9px;margin-top:9px" },
-    h("span", { style: "color:var(--accent);font-weight:700" }, n + "."), h("span", {}, t(k)));
-  const faq = (q, a) => h("div", { style: "margin-top:16px" },
-    h("div", { style: "font-weight:600;color:var(--ink)" }, t(q)),
-    h("p", { class: "note", style: "margin-top:3px" }, t(a)));
-  const faqLink = (q, a, href, linkText) => h("div", { style: "margin-top:16px" },
-    h("div", { style: "font-weight:600;color:var(--ink)" }, t(q)),
-    h("p", { class: "note", style: "margin-top:3px" }, t(a), " ",
-      h("a", { href, target: "_blank", rel: "noopener", style: "color:var(--accent)" }, linkText)));
-  const tech = (n) => h("div", { style: "margin-top:14px" },
-    h("div", { style: "font-weight:600;color:var(--ink)" }, t("tech" + n + "l")),
-    h("p", { class: "note", style: "margin-top:3px" }, t("tech" + n + "d")));
-  render(screen({
-    title: t("infoHowTitle"),
-    body: [
-      h("p", { class: "note" }, t("infoIntro")),
-      step(1, "infoStep1"), step(2, "infoStep2"), step(3, "infoStep3"), step(4, "infoStep4"),
-      h("h2", { style: "margin:24px 0 0" }, t("infoFaqTitle")),
-      faqLink("faqWhatQ", "faqWhatA", "https://qbit.org/", "qbit.org"),
-      faq("faqCustodialQ", "faqCustodialA"), faq("faqStallQ", "faqStallA"), faq("faqHowLongQ", "faqHowLongA"),
-      faq("faqFindQ", "faqFindA"), faq("faqFeesQ", "faqFeesA"), faq("faqWalletQ", "faqWalletA"), faq("faqBackupQ", "faqBackupA"),
-      h("h2", { style: "margin:24px 0 0" }, t("techTitle")),
-      tech(1), tech(2), tech(3), tech(4), tech(5), tech(6), tech(7), tech(8),
-    ],
-    back: () => { rerender = _prevView || (() => init()); rerender(); },
-  }));
+  const back = () => { rerender = _prevView || (() => init()); rerender(); };
+  markScreen(back);
+  const infoStep = (n, k) => h("div", { class: "info-step" }, h("span", { class: "n" }, n), h("p", {}, t(k)));
+  const qa = (q, a, link) => h("div", { class: "qa" },
+    h("div", { class: "q" }, t(q)),
+    h("p", { class: "a" }, t(a), ...(link ? [" ", h("a", { href: link.href, target: "_blank", rel: "noopener" }, link.text)] : [])));
+  const techQa = (n) => h("div", { class: "qa" }, h("div", { class: "q" }, t("tech" + n + "l")), h("p", { class: "a" }, t("tech" + n + "d")));
+  render(h("div", { class: "page" },
+    pageHead(t("infoHowTitle"), back),
+    h("p", { class: "page-intro" }, t("infoIntro")),
+    h("div", { class: "info-steps" }, infoStep(1, "infoStep1"), infoStep(2, "infoStep2"), infoStep(3, "infoStep3"), infoStep(4, "infoStep4")),
+    h("section", { class: "page-section" },
+      h("h2", {}, t("infoFaqTitle")),
+      h("div", { class: "qa-grid" },
+        qa("faqWhatQ", "faqWhatA", { href: "https://qbit.org/", text: "qbit.org" }),
+        qa("faqCustodialQ", "faqCustodialA"), qa("faqStallQ", "faqStallA"), qa("faqHowLongQ", "faqHowLongA"),
+        qa("faqFindQ", "faqFindA"), qa("faqFeesQ", "faqFeesA"), qa("faqWalletQ", "faqWalletA"), qa("faqBackupQ", "faqBackupA"))),
+    h("section", { class: "page-section" },
+      h("h2", {}, t("techTitle")),
+      h("div", { class: "qa-grid" }, techQa(1), techQa(2), techQa(3), techQa(4), techQa(5), techQa(6), techQa(7), techQa(8))),
+  ));
 }
 
-// Recent trades — a public feed of successfully settled swaps (feature-flagged, header tab).
+// Activity — a public feed of successfully settled swaps (feature-flagged, header tab).
 async function stepTrades() {
   if (rerender !== stepTrades) _prevView = rerender;
   rerender = stepTrades;
   const back = () => { rerender = _prevView || (() => init()); rerender(); };
+  markScreen(back);
   let trades = null;
   try { trades = await coordGet("/trades"); } catch { trades = []; }
-  const body = [h("p", { class: "note", style: "margin-top:-4px" }, t("tradesNote"))];
+  let content;
   if (!trades.length) {
-    body.push(h("p", { class: "muted", style: "margin-top:16px" }, t("tradesEmpty")));
+    content = h("p", { class: "muted", style: "margin-top:24px" }, t("tradesEmpty"));
   } else {
     const rows = trades.map((tr) => h("tr", {},
       h("td", {}, `${sats(tr.qbtSats)} QBT`),
       h("td", {}, `${sats(tr.btcSats)} BTC`),
       h("td", {}, `${trimZeros(tr.price.toFixed(8))} BTC/QBT`),
       h("td", { class: "when" }, tr.settledAt ? ago(tr.settledAt) : "—")));
-    body.push(h("table", { class: "trades" },
+    content = h("div", { class: "trades-card" }, h("table", { class: "trades" },
       h("thead", {}, h("tr", {}, h("th", {}, "QBT"), h("th", {}, "BTC"), h("th", {}, t("priceLabel")), h("th", {}, t("tradesWhen")))),
       h("tbody", {}, ...rows)));
   }
-  render(screen({ title: t("tradesTitle"), body, back }));
+  render(h("div", { class: "page" },
+    pageHead(t("tradesTitle"), back),
+    h("p", { class: "page-intro" }, t("tradesNote")),
+    content,
+  ));
 }
 
 function chooseDirection(direction) {

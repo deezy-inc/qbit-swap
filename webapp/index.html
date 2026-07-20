@@ -123,6 +123,27 @@
   .trades th { color:var(--mut); font-weight:550; font-size:12px; }
   .trades th:first-child, .trades td:first-child { text-align:left; }
   .trades td.when { color:var(--mut); }
+  /* content pages (Info / Activity) — wider, landing-like, not a cramped card */
+  .page { max-width:880px; margin:0 auto; padding:clamp(2px,1.5vw,14px) 0 32px; animation:enter .42s ease both; }
+  .page-head { display:flex; align-items:center; justify-content:space-between; gap:18px; margin-bottom:clamp(12px,2vw,18px); }
+  .page-head h1 { font-size:clamp(1.7rem,3.6vw,2.4rem); letter-spacing:-.03em; font-weight:680; color:var(--ink); margin:0; }
+  .page-back { color:var(--mut); font-size:14px; white-space:nowrap; }
+  .page-back:hover { color:var(--ink); }
+  .page-intro { color:var(--mut); font-size:15.5px; line-height:1.6; max-width:62ch; margin:0; }
+  .page-section { border-top:1px solid var(--line); padding-top:clamp(24px,4vw,36px); margin-top:clamp(26px,4vw,38px); }
+  .page-section > h2 { font-size:clamp(1.2rem,2.4vw,1.5rem); letter-spacing:-.02em; font-weight:640; color:var(--ink); margin:0 0 clamp(16px,2.4vw,22px); }
+  .info-steps { display:grid; gap:13px; margin-top:clamp(18px,2.5vw,24px); }
+  .info-step { display:flex; gap:13px; align-items:flex-start; }
+  .info-step .n { flex:none; width:27px; height:27px; border-radius:50%; display:grid; place-items:center; font-size:13px; font-weight:700;
+    color:var(--accent); background:var(--surface); border:1px solid var(--accent-line); }
+  .info-step p { color:var(--mut); line-height:1.55; margin:2px 0 0; }
+  .qa-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px 24px; }
+  .qa { background:var(--surface); border:1px solid var(--line); border-radius:14px; padding:16px 18px; }
+  .qa .q { font-weight:620; color:var(--ink); margin-bottom:6px; font-size:15px; }
+  .qa .a { color:var(--mut); font-size:13.7px; line-height:1.58; margin:0; }
+  .qa .a a { color:var(--accent); }
+  @media (max-width:640px){ .qa-grid { grid-template-columns:1fr; } }
+  .trades-card { background:var(--surface); border:1px solid var(--line); border-radius:14px; padding:2px 18px 8px; margin-top:clamp(18px,2.5vw,24px); overflow-x:auto; }
 
   /* status badge — soft tinted fill, not just an outline */
   .badge { display:inline-flex; align-items:center; gap:6px; padding:4px 11px; border-radius:999px;
