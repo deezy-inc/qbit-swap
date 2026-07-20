@@ -95,7 +95,12 @@ export class Chain {
       const u = (utxos || [])[0];
       return u ? { txid: u.txid, vout: u.vout, amountSats: u.value, height: u.status?.confirmed ? u.status.block_height : null } : null;
     }
-    if (this.backend === "rpc" && this.watch === "wallet") {
+    // Watch-only descriptor wallet: import the HTLC scriptPubKey once, then listunspent 0 sees the
+    // deposit at 0-conf (mempool) and after it confirms. Works on any backend (rpc over HTTP, dev over
+    // the CLI) — the node just needs wallet RPCs available (a watch-only wallet holds no keys, so this
+    // is compatible with a keyless node). Preferred for both BTC and QBT; scales with watched addresses,
+    // not mempool size.
+    if (this.watch === "wallet") {
       const wallet = await this.#ensureWatched(spkHex);
       const utxos = await this.rpcWallet(wallet, "listunspent", 0, 9999999, "[]", true);   // minconf 0 -> includes mempool
       const u = (utxos || []).find((x) => x.scriptPubKey === spkHex);
