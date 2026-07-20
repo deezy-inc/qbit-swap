@@ -26,7 +26,7 @@ const en = {
   // amount
   welcomeTitle: "QBT Trustless OTC Trade Coordinator",
   welcomeBody: "Use this tool to execute a QBT/BTC trade with someone. You must find a counterparty and agree to a price and amount, and this tool helps you execute a trustless cross-chain atomic swap.",
-  heroKicker: "QBT · BTC OTC",
+  heroKicker: "QBT/BTC OTC",
   heroTitle: "Trustless OTC swaps between Bitcoin and Qbit",
   heroSub: "Find a counterparty and agree on a price, then settle a peer-to-peer cross-chain atomic swap. Non-custodial — send from any wallet, and this tool never touches your funds.",
   heroStart: "Start a swap", heroLearn: "How it works",
@@ -185,7 +185,7 @@ const zh = {
   confirmCta: "我已找到交易伙伴，我们已商定报价",
   welcomeTitle: "QBT 无需信任 OTC 交易协调器",
   welcomeBody: "使用此工具与他人执行 QBT/BTC 交易。您需要自行找到对手方并商定价格和数量，本工具帮助您完成无需信任的跨链原子兑换。",
-  heroKicker: "QBT · BTC 场外交易",
+  heroKicker: "QBT/BTC 场外交易",
   heroTitle: "比特币与 Qbit 之间的无需信任场外兑换",
   heroSub: "找到对手方并商定价格，即可完成点对点的跨链原子兑换。非托管——从任意钱包发送，本工具绝不接触您的资金。",
   heroStart: "开始兑换", heroLearn: "工作原理",
