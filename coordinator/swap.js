@@ -172,7 +172,19 @@ export const roleOf = (s, tok) => (tok === s.tokens.alice ? "alice" : tok === s.
 export const allSwaps = () => [...swaps.values()];
 
 // Party submits pubkeys + destination addresses. The creator (alice/initiator) also submits H.
+// Either party may cancel a swap that NOBODY has funded yet — this clears out stale, never-used swaps
+// so the coordinator isn't left watching them. The record is kept (state CANCELED, sticky): the HTLC
+// addresses stay valid, so if someone funds one anyway they can still refund after the timelock.
+export function cancelSwap(s, role) {
+  if (s.funding?.btc || s.funding?.qbit) throw new Error("a deposit already exists — cancel is only for unfunded swaps");
+  if (s.state === "CANCELED" || TERMINAL.includes(s.state)) throw new Error("swap already finished");
+  s.canceled = { by: role, at: Date.now() };
+  s.state = "CANCELED";
+  return touch(s);
+}
+
 export async function submitParty(s, role, data) {
+  if (s.state === "CANCELED") throw new Error("this swap was canceled");
   if (s.state !== "CREATED" && s.state !== "READY") throw new Error("party data locked");
   // First-come lock: once a slot is filled it can't be overwritten by different keys. This makes a
   // shared link single-use — a second person opening the same link is rejected rather than racing to
@@ -251,7 +263,7 @@ export async function poll(s) {
 
   const from = s.funding[fromLeg], to = s.funding[toLeg];
   // recompute the pre-claim state from ground truth (broadcast() owns CLAIMED/COMPLETE/REFUNDED)
-  if (!["CLAIMED", ...TERMINAL].includes(s.state)) {
+  if (!["CLAIMED", "CANCELED", ...TERMINAL].includes(s.state)) {
     let st = "READY";
     if (from) st = "FROM_FUNDED";
     if (to && !to.spent) {
@@ -332,7 +344,7 @@ async function wtClaim(s, role, leg, minTier = 0) {
 // OFFLINE (presence, with its ~15s grace) — an online client finishes its own swap, so the watchtower
 // never races it. It drives the swap to completion (or refund) from that party's pre-signed bundle.
 export async function driveWatchtower(s) {
-  if (!s.roles || !s.htlc || ["CREATED", ...TERMINAL].includes(s.state)) return;
+  if (!s.roles || !s.htlc || ["CREATED", "CANCELED", ...TERMINAL].includes(s.state)) return;
   const { fromLeg, toLeg } = s.roles, H = s.heights || {};
   const unspent = (leg) => s.funding[leg] && !s.funding[leg].spent;
   const away = (role) => !isOnline(s, role);   // only step in for a party that has left
@@ -366,5 +378,6 @@ export function view(s, role) {
     safetyNet: { self: !!s.finish?.[role], counterparty: !!s.finish?.[role === "alice" ? "bob" : "alice"] },
     shortFunded: s.shortFunded || null,
     preimage: s.preimage, broadcasts: s.broadcasts,
+    canceled: s.canceled ? { byYou: s.canceled.by === role, at: s.canceled.at } : null,
   };
 }

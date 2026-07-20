@@ -2,7 +2,7 @@
 // drive swaps through the same endpoints. Auth is a per-party capability token (X-Swap-Token).
 // Live updates over Server-Sent Events (GET /swaps/:id/events). Basic per-IP rate limiting.
 import http from "node:http";
-import { createSwap, getSwap, roleOf, submitParty, broadcast, view, poll, allSwaps, subscribe, markSeen, addConnection, dropConnection, sweepPresence, submitFinish, driveWatchtower } from "./swap.js";
+import { createSwap, getSwap, roleOf, submitParty, broadcast, view, poll, allSwaps, subscribe, markSeen, addConnection, dropConnection, sweepPresence, submitFinish, driveWatchtower, cancelSwap } from "./swap.js";
 import { createOffer, getOffer, isMaker, book, takeOffer, cancelOffer, makerView } from "./offers.js";
 import { btc } from "./chain.js";
 import { btcFeerates, qbitFeerates } from "./fees.js";
@@ -98,6 +98,7 @@ async function handle(req, res) {
         return json(res, 200, r);
       }
       if (method === "POST" && parts[2] === "finish") { submitFinish(s, role, await readBody(req)); return json(res, 200, { armed: true }); }
+      if (method === "POST" && parts[2] === "cancel") { cancelSwap(s, role); return json(res, 200, view(s, role)); }
     }
     return json(res, 404, { error: "not found" });
   } catch (e) { return json(res, 400, { error: String(e.message || e) }); }

@@ -152,6 +152,11 @@ const en = {
   // watchtower safety net
   armingNet: "Setting up your safety net — please don't close this tab yet…",
   armedNet: "Safety net armed ✓ — you can safely close this tab now; the swap will finish or refund on its own.",
+  swapCanceled: "Swap canceled",
+  cancelByYou: "You canceled this swap — it won't proceed.",
+  cancelByCp: "Your counterparty canceled this swap — they're no longer interested. Nothing was funded, so there's nothing to recover.",
+  cancelSwap: "Cancel this swap",
+  cancelConfirm: "Cancel this swap? This can't be undone. Only do this before either side sends funds.",
   tlMatched: "Swap set up",
   tlYouSent: "You sent {coin}",
   tlCpSent: "Counterparty sent {coin}",
@@ -310,6 +315,11 @@ const zh = {
   // watchtower safety net
   armingNet: "正在设置您的安全网——请暂时不要关闭此标签页…",
   armedNet: "安全网已启用 ✓——您现在可以安全关闭此标签页；兑换将自动完成或退款。",
+  swapCanceled: "兑换已取消",
+  cancelByYou: "您已取消此次兑换——它将不会继续。",
+  cancelByCp: "对手方已取消此次兑换——他们不再有意向。由于尚未充值，无需进行任何找回。",
+  cancelSwap: "取消此次兑换",
+  cancelConfirm: "确定取消此次兑换吗？此操作无法撤销。请仅在任何一方发送资金之前操作。",
   tlMatched: "兑换已建立",
   tlYouSent: "您已发送 {coin}",
   tlCpSent: "对手方已发送 {coin}",

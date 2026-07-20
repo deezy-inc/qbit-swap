@@ -548,6 +548,10 @@ async function startParticipant({ coordinator, id, token }) {
   flow.mode = "join"; flow.coordinator = coordinator; flow.joinId = id; flow.joinToken = token;
   render(screen({ title: t("loadingSwap"), body: [h("span", { class: "muted" }, t("fetchingTerms"))] }));
   const v = await (await fetch(`${coordinator}/swaps/${id}`, { headers: { "x-swap-token": token } })).json();
+  if (v.state === "CANCELED") {   // creator called it off before it started — don't send them through the join flow
+    markScreen(null);
+    return render(screen({ title: t("swapCanceled"), body: [h("p", { class: "note" }, v.canceled?.byYou ? t("cancelByYou") : t("cancelByCp"))] }));
+  }
   flow.direction = v.direction; flow.btcSats = v.terms.btcSats; flow.qbtSats = v.terms.qbtSats;
   flow.feerates = v.feerates;
   stepInvited();
@@ -579,7 +583,7 @@ function startLive() {
   flow.client.onUpdate = (v) => renderLive(liveCard, v);
   flow.client.start();
 }
-const STATE_CLASS = { COMPLETE: "good", REFUNDED: "warn", CLAIMABLE: "info", CLAIMED: "info", ABORTED: "bad" };
+const STATE_CLASS = { COMPLETE: "good", REFUNDED: "warn", CLAIMABLE: "info", CLAIMED: "info", ABORTED: "bad", CANCELED: "warn" };
 // Public block explorers for the tx links in the timeline.
 const EXPLORER = { btc: "https://mempool.space/tx/", qbit: "https://qbitmempool.robertclarke.com/tx/" };
 const txLink = (leg, txid) => h("a", { href: EXPLORER[leg] + txid, target: "_blank", rel: "noopener" }, shorten(txid, 8));
@@ -620,14 +624,23 @@ function renderLive(card, v) {
   const { send, recv } = roleCoins();
   const fundLeg = coinLeg(send), funded = v.funding?.[fundLeg];
   const addr = v.htlc?.[fundLeg]?.address;
-  const terminal = v.state === "COMPLETE" || v.state === "REFUNDED";
+  const canceled = v.state === "CANCELED";
+  const terminal = v.state === "COMPLETE" || v.state === "REFUNDED" || canceled;
 
-  const headline = terminal ? (v.state === "COMPLETE" ? t("swapComplete") : t("swapRefunded"))
+  const headline = canceled ? t("swapCanceled")
+    : v.state === "COMPLETE" ? t("swapComplete") : v.state === "REFUNDED" ? t("swapRefunded")
     : !addr ? t("waitingCounterparty")
     : funded ? t("coinLocked", { coin: send }) : t("sendToLock", { coin: send });
   card.append(h("div", { style: "display:flex;justify-content:space-between;align-items:center" },
     h("h2", { style: "margin:0" }, headline),
     h("span", { class: "badge " + (STATE_CLASS[v.state] || "") }, v.state)));
+
+  // Swap called off before anyone funded — show who cancelled and stop.
+  if (canceled) {
+    liveGuard = { risky: false };
+    card.append(h("p", { class: "note", style: "margin-top:12px" }, v.canceled?.byYou ? t("cancelByYou") : t("cancelByCp")));
+    return;
+  }
 
   // While waiting for the counterparty, show the deal prominently.
   if (!terminal && !addr) {
@@ -687,6 +700,14 @@ function renderLive(card, v) {
   card.append(h("p", { class: "note" }, statusLine(v, send, recv)));
   if (!terminal && v.shortFunded) card.append(h("p", { class: "note", style: "color:var(--bad)" }, t("underfundWarn")));
   if (v.actionError) card.append(h("p", { class: "note", style: "color:var(--bad)" }, "⚠ " + v.actionError));
+  // Either party can cancel while NOTHING is funded — clears stale swaps; the counterparty sees it.
+  if (!terminal && !v.funding?.btc && !v.funding?.qbit) {
+    card.append(h("div", { style: "margin-top:16px;text-align:center" },
+      h("a", { href: "#", style: "color:var(--mut);font-size:13px", onclick: async (e) => {
+        e.preventDefault(); if (!confirm(t("cancelConfirm"))) return;
+        try { await flow.client.cancel(); } catch (err) { alert(err.message); }
+      } }, t("cancelSwap"))));
+  }
   if (terminal) vault.purge(v.id).catch(() => {});
 }
 function statusLine(v, send, recv) {

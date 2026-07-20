@@ -113,6 +113,8 @@ export class SwapClient {
     else this.timer = setInterval(async () => { try { this.#onView(await this.#api(`/swaps/${this.id}`, { token: this.token })); } catch {} }, 2000);
   }
   stop() { this.es?.close(); clearInterval(this.timer); }
+  // Cancel an unfunded swap (either party). The coordinator rejects it once a deposit exists.
+  cancel() { return this.#api(`/swaps/${this.id}/cancel`, { token: this.token, method: "POST" }); }
 
   async #onView(v) {
     this.view = v;
@@ -123,7 +125,7 @@ export class SwapClient {
     this.onUpdate(v);
     if (this.halted) return;
     try { await this.#act(v); } catch (e) { this.onUpdate({ ...v, actionError: String(e.message || e) }); }
-    if (v.state === "COMPLETE" || v.state === "REFUNDED") this.stop();
+    if (v.state === "COMPLETE" || v.state === "REFUNDED" || v.state === "CANCELED") this.stop();
   }
   // Recompute both HTLC scriptPubKeys the way the coordinator must have, using our own real keys — a
   // mismatch means the address we'd fund isn't the script we can claim/refund. (This binds our keys, H,
