@@ -35,7 +35,7 @@ function unified() {
       if (path.startsWith("/faucet/")) return proxy(req, res, FAUCET, path.slice(7)); // strip "/faucet"
       try {
         const rel = decodeURIComponent(path.split("?")[0]);
-        const file = join(ROOT, rel === "/" ? "/index.html" : rel);
+        const file = join(ROOT, rel === "/" || !extname(rel) ? "/index.html" : rel);   // SPA fallback for /api, /info, /activity
         if (!file.startsWith(ROOT)) { res.writeHead(403); return res.end(); }
         let body = await readFile(file);
         if (file.endsWith("index.html")) body = Buffer.from(body.toString().replace("</head>", `${CONFIG}\n</head>`));

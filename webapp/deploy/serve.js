@@ -74,7 +74,9 @@ function unified() {
       if (path.startsWith("/coord/")) return proxy(req, res, COORD, path.slice(6)); // strip "/coord"
       try {
         const rel = decodeURIComponent(path.split("?")[0]);
-        const file = join(ROOT, rel === "/" ? "/index.html" : rel);
+        // SPA fallback: "/" and any extensionless client route (/api, /info, /activity, …) serve index.html;
+        // real assets (.js/.css/.wasm/…) are served by name.
+        const file = join(ROOT, rel === "/" || !extname(rel) ? "/index.html" : rel);
         if (!file.startsWith(ROOT)) { res.writeHead(403); return res.end(); }
         let body = await readFile(file);
         if (file.endsWith("index.html")) {

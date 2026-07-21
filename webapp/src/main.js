@@ -126,20 +126,34 @@ const render = (node) => { while (appEl.firstChild) appEl.removeChild(appEl.firs
 // both routes pop the same stack. Forward navigation pushes a state; going back runs the current
 // screen's Back handler, which re-renders the previous screen (suppressed so it doesn't re-push).
 let curBack = null, histSeq = 0, histPos = 0, histSuppress = false;
-function markScreen(back) {
+// Optional `url` gives a screen a real permalink (e.g. /api); omitted → the URL is left as-is.
+function markScreen(back, url) {
   curBack = typeof back === "function" ? back : null;
   if (histSuppress) return;              // rendering because of a back-nav or a lang re-render — don't push
-  if (histSeq === 0) { histSeq = histPos = 1; history.replaceState({ pos: 1 }, ""); }   // first screen: replace, so Back off it leaves the app
-  else { histPos = ++histSeq; history.pushState({ pos: histPos }, ""); }
+  const first = histSeq === 0;           // first screen: replace, so Back off it leaves the app
+  if (first) histSeq = histPos = 1; else histPos = ++histSeq;
+  const st = { pos: histPos };
+  if (url !== undefined) (first ? history.replaceState(st, "", url) : history.pushState(st, "", url));
+  else (first ? history.replaceState(st, "") : history.pushState(st, ""));
+}
+// Header pages with their own permalink: /info · /api · /activity (or the #info/#api/#activity forms).
+const NAV_PAGES = { info: () => stepInfo(), api: () => stepApi(), ...(RECENT_TRADES ? { activity: () => stepTrades() } : {}) };
+function pageFromLocation() {
+  const path = location.pathname.replace(/^\/+|\/+$/g, "").toLowerCase();
+  if (NAV_PAGES[path]) return path;
+  const hash = decodeURIComponent(location.hash.replace(/^#/, "")).toLowerCase();
+  return NAV_PAGES[hash] ? hash : null;
 }
 window.addEventListener("popstate", (e) => {
+  const pg = pageFromLocation();           // forward/back landed on a nav-page URL → render it
+  if (pg) { histPos = e.state?.pos ?? histPos; histSuppress = true; try { NAV_PAGES[pg](); } finally { histSuppress = false; } return; }
   const target = e.state?.pos ?? 0;
-  if (target < histPos && curBack) {     // going back one or more screens
+  if (target < histPos && curBack) {       // going back one or more screens
     histPos = target;
     histSuppress = true;
     try { curBack(); } finally { histSuppress = false; }
   } else {
-    histPos = target;                    // at the root, or a forward hop we can't reconstruct — leave the view as-is
+    histPos = target;                      // at the root, or a forward hop we can't reconstruct — leave the view as-is
   }
 });
 
@@ -193,10 +207,15 @@ async function init() {
     // Not ours yet: a full invite link (coord+id+token) means we're the invited participant → join fresh.
     if (q.coord && q.token) return startParticipant({ coordinator: decodeURIComponent(q.coord), id: q.id, token: q.token });
   }
+  // Deep-link / reload on a header page (/api, /info, /activity, or their #hash forms) → open that page.
+  // rerender is set to a home-reset first, so its Back goes to the hero (not back into this same page).
+  const pg = pageFromLocation();
+  if (pg) { rerender = homeFromNav; return NAV_PAGES[pg](); }
   // The root URL always opens on the hero landing — even for a returning user. Any in-progress swaps
   // are still one click away: "Start a swap" → the chooser lists them, and the backup-recover card is there too.
   stepWelcome();
 }
+function homeFromNav() { try { history.replaceState({ pos: histPos }, "", "/" + location.search); } catch {} stepWelcome(); }
 
 // Qbit orbit emblem — the brand mark with its dot + ring as a spinning "orbit" group around the core.
 // Centered spinning orbit emblem — the loading indicator while a swap view / backup loads.
@@ -271,7 +290,7 @@ function stepInfo() {
   if (rerender !== stepInfo) _prevView = rerender;
   rerender = stepInfo;
   const back = () => { rerender = _prevView || (() => init()); rerender(); };
-  markScreen(back);
+  markScreen(back, "/info");
   const infoStep = (n, k) => h("div", { class: "info-step" }, h("span", { class: "n" }, n), h("p", {}, t(k)));
   const qa = (q, a, link) => h("div", { class: "qa" },
     h("div", { class: "q" }, t(q)),
@@ -298,7 +317,7 @@ async function stepTrades() {
   if (rerender !== stepTrades) _prevView = rerender;
   rerender = stepTrades;
   const back = () => { rerender = _prevView || (() => init()); rerender(); };
-  markScreen(back);
+  markScreen(back, "/activity");
   let trades = null;
   try { trades = await coordGet("/trades"); } catch { trades = []; }
   let btcUsd = 0;
@@ -1093,7 +1112,7 @@ function stepApi() {
   if (rerender !== stepApi) _prevView = rerender;
   rerender = stepApi;
   const back = () => { rerender = _prevView || (() => init()); rerender(); };
-  markScreen(back);
+  markScreen(back, "/api");
   const ep = ([m, path, dk]) => h("div", { class: "api-ep" },
     h("div", { class: "row1" }, h("span", { class: "api-m " + m.toLowerCase() }, m), h("code", { class: "api-path" }, path)),
     h("div", { class: "api-desc" }, t(dk)));
@@ -1126,7 +1145,7 @@ function goHome() {
   flow.client?.stop?.(); stopJoinHeartbeat(); clearInterval(flow._tick);
   Object.assign(flow, { mode: null, role: null, direction: null, btcSats: 0, qbtSats: 0, receiveAddr: "", refundAddr: "", client: null, inviteLink: null, fee: null, verified: false, _recoverySaved: false });
   liveGuard = { risky: false };
-  if (location.hash) history.replaceState(null, "", location.pathname + location.search);
+  if (location.hash || location.pathname !== "/") history.replaceState(null, "", "/" + location.search);   // drop any #hash or /page permalink
   stepWelcome();   // always return to the hero landing, not the direction chooser
 }
 for (const sel of ["header .mark", "header h1"]) document.querySelector(sel)?.addEventListener("click", goHome);
