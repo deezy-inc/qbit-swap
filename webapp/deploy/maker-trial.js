@@ -26,8 +26,9 @@ async function fulfill(swapId, makerSwapToken, makerRole = "bob") {
   const maker = new SwapClient({
     coordinator: COORD,
     onUpdate: async (v) => {
-      // Tier-Nolan safety: only lock QBT once the taker's BTC HTLC is on-chain.
-      if (!funded && v.htlc && v.funding?.btc && !v.funding?.qbit) {
+      // Sequenced funding: only lock QBT once the taker's BTC deposit is BURIED (fundGate.cleared) — not
+      // merely seen — so a taker can't RBF-cancel their BTC after we've committed the QBT.
+      if (!funded && v.htlc && v.fundGate?.cleared && !v.funding?.qbit) {
         funded = true;
         try { await qbit.rpcWallet("bob", "sendtoaddress", v.htlc.qbit.address, v.terms.qbtSats / 1e8); console.log(`  [maker] funded QBT ${v.terms.qbtSats / 1e8} for swap ${swapId.slice(0, 8)}`); }
         catch (e) { funded = false; console.log("  [maker] fund error:", e.message); }

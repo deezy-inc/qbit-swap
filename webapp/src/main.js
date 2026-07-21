@@ -1070,9 +1070,35 @@ window.addEventListener("drop", async (e) => {
   try { resumeSwap(importBackup(await file.text())); } catch (err) { alert(t("errRestore", { msg: err.message })); }
 });
 
+// ── API reference page (linked from the header) ───────────────────────────────
+const API_GROUPS = [
+  { head: "apiSecPublic", eps: [["GET", "/health", "apiHealth"], ["GET", "/feerates", "apiFeerates"], ["GET", "/trades", "apiTrades"]] },
+  { head: "apiSecBook", eps: [["GET", "/offers", "apiBook"], ["POST", "/offers", "apiPostOffer"], ["POST", "/offers/:id/take", "apiTake"], ["GET", "/offers/:id", "apiMakerView"], ["POST", "/offers/:id/cancel", "apiCancelOffer"]] },
+  { head: "apiSecSwap", eps: [["POST", "/swaps", "apiCreateSwap"], ["GET", "/swaps/:id", "apiView"], ["GET", "/swaps/:id/events", "apiEvents"], ["POST", "/swaps/:id/party", "apiParty"], ["POST", "/swaps/:id/broadcast", "apiBroadcast"], ["POST", "/swaps/:id/finish", "apiFinish"], ["POST", "/swaps/:id/cancel", "apiCancelSwap"], ["GET", "/swaps/:id/beat", "apiBeat"]] },
+];
+function stepApi() {
+  if (rerender !== stepApi) _prevView = rerender;
+  rerender = stepApi;
+  const back = () => { rerender = _prevView || (() => init()); rerender(); };
+  markScreen(back);
+  const ep = ([m, path, dk]) => h("div", { class: "api-ep" },
+    h("div", { class: "row1" }, h("span", { class: "api-m " + m.toLowerCase() }, m), h("code", { class: "api-path" }, path)),
+    h("div", { class: "api-desc" }, t(dk)));
+  render(h("div", { class: "page" },
+    pageHead(t("apiTitle"), back),
+    h("p", { class: "page-intro" }, t("apiIntro")),
+    h("div", { class: "api-base" }, "Base URL  ·  " + DEFAULT_COORD),
+    h("p", { class: "note", style: "margin-top:10px;max-width:62ch" }, t("apiAuthNote")),
+    ...API_GROUPS.map((g) => h("section", { class: "page-section" },
+      h("h2", {}, t(g.head)),
+      h("div", { class: "api-list" }, ...g.eps.map(ep)))),
+  ));
+}
+
 // ── language switcher (header) ────────────────────────────────────────────────
 function renderChrome() {
   const info = document.getElementById("info-link"); if (info) info.textContent = t("infoTab");
+  const apiL = document.getElementById("api-link"); if (apiL) apiL.textContent = t("apiTab");
   const trades = document.getElementById("trades-link"); if (trades) trades.textContent = t("tradesTab");
   const el = document.getElementById("lang"); if (!el) return;
   while (el.firstChild) el.removeChild(el.firstChild);
@@ -1092,6 +1118,7 @@ function goHome() {
 }
 for (const sel of ["header .mark", "header h1"]) document.querySelector(sel)?.addEventListener("click", goHome);
 document.querySelector("#info-link")?.addEventListener("click", (e) => { e.preventDefault(); stepInfo(); });
+document.querySelector("#api-link")?.addEventListener("click", (e) => { e.preventDefault(); stepApi(); });
 if (RECENT_TRADES) {
   const tl = document.getElementById("trades-link"), il = document.getElementById("info-link");
   if (tl) { tl.style.display = ""; tl.style.marginLeft = "auto"; if (il) il.style.marginLeft = "0"; tl.addEventListener("click", (e) => { e.preventDefault(); stepTrades(); }); }
