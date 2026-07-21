@@ -23,6 +23,7 @@ import {
 } from "../client/index.js";
 import { qbit, btc } from "./chain.js";
 import { btcFeerates, cachedBtcFeerates, cachedQbitFeerates } from "./fees.js";
+import { feeAddress, validateFeeKey } from "./feeaddr.js";
 
 export const States = ["CREATED", "READY", "FROM_FUNDED", "TO_FUNDED", "MATURING", "CLAIMABLE", "CLAIMED", "COMPLETE", "REFUNDED", "ABORTED"];
 const TERMINAL = ["COMPLETE", "REFUNDED", "ABORTED"];
@@ -93,6 +94,32 @@ const MIN_SATS = { btc: Number(process.env.MIN_BTC_SATS || 50000), qbit: Number(
 // (regtest bcrt/qbrt · testnet tb/tqb · mainnet bc/qb) or users get an unspendable address.
 const HRP = { btc: process.env.BTC_HRP || "bcrt", qbit: process.env.QBIT_HRP || "qbrt" };
 
+// ── coordinator fee (optional, default OFF) ────────────────────────────────────────────────────
+// A fee charged ON TOP of the buyer's BTC deposit and paid to a FRESH watch-only taproot address per
+// swap, derived from an xpub / tr(...) descriptor the admin supplies (feeaddr.js). The coordinator
+// holds no key — it can watch fees arrive but never spend them. Enabled only when BOTH a positive rate
+// and a valid key are configured; otherwise every swap is fee-free and behaves exactly as before.
+const FEE_BPS = Number(process.env.FEE_BPS || 0);                                    // basis points, e.g. 250 = 2.5%
+const FEE_KEY = process.env.FEE_DESCRIPTOR || process.env.FEE_XPUB || "";            // taproot descriptor or xpub
+const FEE_MIN_SATS = Number(process.env.FEE_MIN_SATS || 1000);                       // skip the fee below this (keeps the on-chain fee output above dust after the network fee)
+const FEE_NETWORK = { bc: "mainnet", tb: "testnet", sb: "signet", bcrt: "regtest" }[HRP.btc] || "regtest";
+const FEE_ON = FEE_BPS > 0 && !!FEE_KEY;
+// Next BIP32 receive index to hand out — resumed past anything already used by persisted swaps (load()
+// has already populated `swaps`), so a restart never reissues a fee address. A fresh one per swap; gaps ok.
+let feeNextIndex = 1 + [...swaps.values()].reduce((m, s) => Math.max(m, s.fee?.index ?? -1), -1);
+if (FEE_ON) {
+  try { console.log(`[fee] ${FEE_BPS} bps · watch-only taproot (${FEE_NETWORK}); index 0 → ${validateFeeKey(FEE_KEY, FEE_NETWORK)}`); }
+  catch (e) { throw new Error(`FEE_DESCRIPTOR / FEE_XPUB is invalid: ${e.message}`); }
+}
+// A swap's coordinator fee (or null when off / below the floor): a fresh address + the sats charged.
+function deriveFee(btcSats) {
+  if (!FEE_ON) return null;
+  const sats = Math.round((btcSats * FEE_BPS) / 10000);
+  if (sats < FEE_MIN_SATS) return null;
+  const index = feeNextIndex++;
+  return { bps: FEE_BPS, sats, index, address: feeAddress(FEE_KEY, index, FEE_NETWORK) };
+}
+
 // ── HTLC timelocks, in WALL-CLOCK time (not raw blocks) ───────────────────────────────────────
 // Tier-Nolan safety: the initiator's leg (fromLeg) must stay refundable LONGER — in real time — than
 // the participant's leg (toLeg), so the participant is forced to reveal the preimage (claiming their
@@ -158,6 +185,7 @@ export function createSwap({ btcSats, qbtSats, securityLevel = "high" }) {
   const s = {
     id: token(), tokens: { alice: token(), bob: token() },
     terms: { btcSats, qbtSats, securityLevel, direction },
+    fee: deriveFee(btcSats),               // optional coordinator fee (fresh watch-only address) — null when off
     roles: legsFor(direction),             // { fromLeg, toLeg } — initiator funds fromLeg, claims toLeg
     state: "CREATED", H: null,
     party: { alice: null, bob: null },
@@ -258,7 +286,7 @@ export async function poll(s) {
   // Only count a leg as funded when the deposit meets the agreed amount — otherwise a counterparty
   // could underfund their HTLC and short the other side. An underfunded leg is surfaced (shortFunded)
   // but doesn't progress the swap, so it stalls and the underfunder can refund after the timelock.
-  const need = { btc: s.terms.btcSats, qbit: s.terms.qbtSats };
+  const need = { btc: s.terms.btcSats + (s.fee?.sats || 0), qbit: s.terms.qbtSats };   // buyer funds the coordinator fee on top of the BTC leg
   // Discover funding, or keep re-checking a still-unconfirmed (mempool) deposit until it confirms.
   // Re-deriving from findOutput while unconfirmed also tracks an RBF'd deposit to its new outpoint,
   // and clears it if the mempool tx is dropped without replacement.
@@ -418,7 +446,7 @@ export function view(s, role) {
   return {
     id: s.id, role, state: s.state, terms: s.terms, direction: s.terms.direction, roles: s.roles,
     H: s.H, locktimes: s.locktimes, htlc: s.htlc, funding: s.funding, heights: s.heights,
-    confsTarget: s.confsTarget, fromConfsTarget: s.fromConfsTarget, refund: s.refund, feerates: { btc: cachedBtcFeerates(), qbit: cachedQbitFeerates() },
+    confsTarget: s.confsTarget, fromConfsTarget: s.fromConfsTarget, fee: s.fee || null, refund: s.refund, feerates: { btc: cachedBtcFeerates(), qbit: cachedQbitFeerates() },
     counterparty: s.party[role === "alice" ? "bob" : "alice"], self: s.party[role],
     counterpartyOnline: isOnline(s, role === "alice" ? "bob" : "alice"), selfOnline: isOnline(s, role),
     safetyNet: { self: !!s.finish?.[role], counterparty: !!s.finish?.[role === "alice" ? "bob" : "alice"] },

@@ -213,9 +213,9 @@ export class SwapClient {
     // participant signs the claim preimage-LESS (the coordinator splices the preimage in on reveal).
     const claimPreimage = this.role === "alice" ? this.secret : new Uint8Array(0);
     // skip any tier whose fee would leave a dust/negative output (defensive; createSwap already floors amounts)
-    const amount = v.funding[claim].amountSats;
-    const affordable = LADDER[claim].map((fr) => ({ fr, fee: feeFor(claim, "claim", fr, v.feerates) })).filter(({ fee }) => amount - fee > DUST);
-    const tiers = await Promise.all((affordable.length ? affordable : [{ fr: LADDER[claim][0], fee: feeFor(claim, "claim", LADDER[claim][0], v.feerates) }]).map(async ({ fr, fee }) =>
+    const amount = v.funding[claim].amountSats, xvb = feeVbytes(v, claim, "claim");   // +vbytes if this claim carries the fee output
+    const affordable = LADDER[claim].map((fr) => ({ fr, fee: feeFor(claim, "claim", fr, v.feerates, xvb) })).filter(({ fee }) => amount - fee > DUST);
+    const tiers = await Promise.all((affordable.length ? affordable : [{ fr: LADDER[claim][0], fee: feeFor(claim, "claim", LADDER[claim][0], v.feerates, xvb) }]).map(async ({ fr, fee }) =>
       ({ feerate: fr, tx: hex(await this.#build(v, claim, "claim", claimPreimage, fee)) })));
     const refundFeerate = LADDER[refund][Math.floor(LADDER[refund].length / 2)];
     const refundTx = hex(await this.#build(v, refund, "refund", new Uint8Array(0), feeFor(refund, "refund", refundFeerate, v.feerates)));
@@ -236,7 +236,7 @@ export class SwapClient {
   // Live claim/refund the party signs itself: size the BTC fee at mempool's High-priority tier
   // (v.feerates.fastestFee) so it confirms promptly — the pre-signed fee ladder is only the fallback
   // the watchtower uses when this party is OFFLINE. Never let the fee eat the output below dust.
-  #liveFee(v, leg, kind) { const amt = v.funding?.[leg]?.amountSats || 0; return Math.min(dynFee(leg, kind, v.feerates), amt - DUST); }
+  #liveFee(v, leg, kind) { const amt = v.funding?.[leg]?.amountSats || 0; return Math.min(dynFee(leg, kind, v.feerates, feeVbytes(v, leg, kind)), amt - DUST); }
   async #claim(v, leg, preimage) { return this.#send(leg, "claim", await this.#build(v, leg, "claim", preimage, this.#liveFee(v, leg, "claim"))); }
   async #refund(v, leg) { return this.#send(leg, "refund", await this.#build(v, leg, "refund", new Uint8Array(0), this.#liveFee(v, leg, "refund"))); }
 
@@ -264,7 +264,16 @@ export class SwapClient {
   async #buildBtc(v, kind, preimage, feeSats) {
     const f = v.funding.btc, ws = bin(v.htlc.btc.witnessScript), destSpk = addressToScriptPubKey(this.btcDest);
     const branch = kind === "refund" ? "refund" : "claim";
-    return btcSpend({ prevTxidLE: bin(f.txid).reverse(), vout: f.vout, amount: f.amountSats, ws, priv: this.btcPriv, destSpk, outVal: f.amountSats - feeSats, branch, preimage, locktime: branch === "refund" ? v.locktimes.btc : 0 });
+    // Coordinator fee: on a successful BTC claim, add a second output paying the coordinator's fee
+    // address. The buyer funded it on top of the swap amount, so the seller still nets the full swap
+    // amount; the claim's own network fee (feeSats) is taken out of the fee output (per policy). No fee
+    // on refunds. Dropped if it would be dust (claim still confirms; the fee is just skipped that time).
+    let extraOut = null, outVal = f.amountSats - feeSats;
+    if (branch === "claim" && v.fee?.sats > 0 && v.fee.address) {
+      const feeOutVal = v.fee.sats - feeSats;
+      if (feeOutVal > DUST) { extraOut = { spk: addressToScriptPubKey(v.fee.address), value: feeOutVal }; outVal = f.amountSats - v.fee.sats; }
+    }
+    return btcSpend({ prevTxidLE: bin(f.txid).reverse(), vout: f.vout, amount: f.amountSats, ws, priv: this.btcPriv, destSpk, outVal, branch, preimage, locktime: branch === "refund" ? v.locktimes.btc : 0, extraOut });
   }
 }
 
@@ -299,17 +308,21 @@ const LADDER = { btc: [2, 8, 25, 75, 200], qbit: [1, 5] };
 // and the tx can stall. Slightly conservative (real: qbit ~3900, btc refund ~130) so a floored fee
 // still clears relay.
 const VBYTES = { btc: { claim: 165, refund: 140 }, qbit: { claim: 4200, refund: 4200 } };
+// Marginal vsize of the coordinator-fee output (a P2TR output ≈ 43 vB), added to a BTC claim that
+// carries one so the network fee is sized for the real 2-output transaction.
+const FEE_OUT_VB = 43;
+const feeVbytes = (v, leg, kind) => (leg === "btc" && kind === "claim" && v.fee?.sats > 0 ? FEE_OUT_VB : 0);
 // Absolute fee floor (sats): never pay below the node's own min-relay feerate for this tx's size
 // (`feerates.<leg>.minimumFee` — BTC from mempool.space, Qbit from getmempoolinfo). No hardcoded floor.
-const relayFloor = (leg, kind, feerates) => Math.ceil(Math.max(1, feerates?.[leg]?.minimumFee || 1) * VBYTES[leg][kind]);
-const feeFor = (leg, kind, feerate, feerates) => Math.max(relayFloor(leg, kind, feerates), Math.round(feerate * VBYTES[leg][kind]));
+const relayFloor = (leg, kind, feerates, extraVb = 0) => Math.ceil(Math.max(1, feerates?.[leg]?.minimumFee || 1) * (VBYTES[leg][kind] + extraVb));
+const feeFor = (leg, kind, feerate, feerates, extraVb = 0) => Math.max(relayFloor(leg, kind, feerates, extraVb), Math.round(feerate * (VBYTES[leg][kind] + extraVb)));
 // The fee (sats) for a live-signed claim/refund, sized from the coordinator's per-chain recommendation
 // (`view.feerates = { btc, qbit }`): High priority (fastestFee) for the urgent claim, Medium
 // (halfHourFee) for the timelock-gated refund. BTC comes from mempool.space; Qbit from the node's own
 // estimatesmartfee. This is the NORMAL path; the pre-signed ladder is only for extreme situations (a
 // party offline during a fee spike).
-export function dynFee(leg, kind, feerates) {
+export function dynFee(leg, kind, feerates, extraVb = 0) {
   const tier = kind === "claim" ? "fastestFee" : "halfHourFee";
   const fr = Math.max(1, feerates?.[leg]?.[tier] || 0);
-  return Math.max(relayFloor(leg, kind, feerates), Math.round(fr * VBYTES[leg][kind]));
+  return Math.max(relayFloor(leg, kind, feerates, extraVb), Math.round(fr * (VBYTES[leg][kind] + extraVb)));
 }

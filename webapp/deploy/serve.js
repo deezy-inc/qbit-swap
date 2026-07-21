@@ -35,6 +35,7 @@ const cfg = [
   `window.QBIT_HRPS=${JSON.stringify(hrps)};`,
   process.env.ORDERBOOK ? "window.QBIT_ORDERBOOK=true;" : "",
   process.env.RECENT_TRADES ? "window.QBIT_RECENT_TRADES=true;" : "",
+  process.env.FEE_BPS ? `window.QBIT_FEE_BPS=${Number(process.env.FEE_BPS) || 0};` : "",   // pre-create fee estimate; authoritative amount comes from the swap view
 ].join("");
 const CONFIG = `<script>${cfg}</script>`;
 

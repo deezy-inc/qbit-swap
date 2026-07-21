@@ -40,6 +40,7 @@ const DEFAULT_COORD = globalThis.QBIT_COORDINATOR || "http://127.0.0.1:8787";
 const FAUCET = globalThis.QBIT_TRIAL_FAUCET || null;
 const ORDERBOOK = globalThis.QBIT_ORDERBOOK === true;   // feature flag, default OFF — peer-to-peer only
 const RECENT_TRADES = globalThis.QBIT_RECENT_TRADES === true;   // feature flag, default OFF — public recent-trades tab
+const FEE_BPS = Number(globalThis.QBIT_FEE_BPS || 0);   // >0 when the coordinator charges a platform fee (basis points)
 const appEl = document.getElementById("app");
 const vault = new Vault();
 let rerender = () => init();     // re-invoked on language change to redraw the current screen
@@ -56,14 +57,36 @@ const coinLeg = (coin) => (coin === "BTC" ? "btc" : "qbit");
 const sats = (n) => (n / 1e8).toLocaleString(undefined, { maximumFractionDigits: 8 });
 const toSats = (v) => Math.round(parseFloat(v) * 1e8);
 const DUST_UI = 546;
+// ── coordinator fee (optional) ────────────────────────────────────────────────
+// The platform fee for the current swap, in BTC sats (0 when off). Authoritative from the live view;
+// during the pre-create screens it's estimated from the configured rate.
+function feeSats(v) {
+  const fee = v?.fee ?? flow.client?.view?.fee ?? flow.fee;
+  if (fee) return fee.sats || 0;
+  return FEE_BPS ? Math.round((flow.btcSats || 0) * FEE_BPS / 10000) : 0;
+}
+const feeBps = (v) => (v?.fee ?? flow.client?.view?.fee ?? flow.fee)?.bps ?? FEE_BPS;
+const feePct = (v) => (feeBps(v) / 100).toLocaleString(undefined, { maximumFractionDigits: 2 });
+// What the current party must SEND — grossed up by the fee only for the BTC sender (the buyer bears it).
+function sendSats(v) { const { send } = roleCoins(); return coinSats(send) + (send === "BTC" ? feeSats(v) : 0); }
+
 // What the receiver nets after the network fee for CLAIMING the coin they receive. The claim is sized
-// at mempool's High-priority feerate (same dynFee the client signs with), so this matches reality.
-function netReceive(recv, feerates) {
+// at mempool's High-priority feerate (same dynFee the client signs with), so this matches reality. When
+// a coordinator fee is on, the BTC receiver (seller) nets the full amount — the fee output absorbs the
+// claim's network fee.
+function netReceive(recv, feerates, feeOn = false) {
   const gross = coinSats(recv);
+  if (recv === "BTC" && feeOn) return { gross, fee: 0, net: gross };
   const fee = Math.min(dynFee(coinLeg(recv), "claim", feerates), Math.max(0, gross - DUST_UI));
   return { gross, fee, net: gross - fee };
 }
 const feeStr = (coin, fee) => (coin === "BTC" ? `${fee.toLocaleString()} sat` : `${sats(fee)} QBT`);
+// A one-line breakdown shown to the BTC sender (buyer) when a platform fee applies: swap + fee = total.
+function feeBreakdown(v) {
+  const { send } = roleCoins(), f = feeSats(v);
+  if (!(send === "BTC" && f > 0)) return null;
+  return h("div", { class: "note", style: "margin-top:6px;font-size:12.5px" }, t("feeBreakdown", { swap: sats(coinSats("BTC")), fee: sats(f), pct: feePct(v) }));
+}
 const shorten = (s, n = 10) => (s && s.length > 2 * n ? `${s.slice(0, n)}…${s.slice(-n)}` : s);
 const trimZeros = (s) => s.replace(/0+$/, "").replace(/\.$/, "");
 const ago = (ts) => { const s = (Date.now() - ts) / 1000; return s < 60 ? `${Math.floor(s)}s` : s < 3600 ? `${Math.floor(s / 60)}m` : s < 86400 ? `${Math.floor(s / 3600)}h` : `${Math.floor(s / 86400)}d`; };
@@ -133,7 +156,7 @@ async function faucetNewAddress(leg) { const r = await fetch(`${FAUCET}/newaddre
 async function prefill(input, coin) { if (!FAUCET) return; try { input.value = await faucetNewAddress(coinLeg(coin)); } catch {} }
 
 // ── flow state ────────────────────────────────────────────────────────────────
-const flow = { mode: null, role: null, direction: null, coordinator: DEFAULT_COORD, btcSats: 0, qbtSats: 0, receiveAddr: "", refundAddr: "", client: null, inviteLink: null };
+const flow = { mode: null, role: null, direction: null, coordinator: DEFAULT_COORD, btcSats: 0, qbtSats: 0, receiveAddr: "", refundAddr: "", client: null, inviteLink: null, fee: null };
 const coinSats = (coin) => (coin === "BTC" ? flow.btcSats : flow.qbtSats);
 // What THIS party sends/receives, from their role: alice (QBT buyer) sends BTC & receives QBT; bob
 // (QBT seller) sends QBT & receives BTC. Independent of who created the swap.
@@ -460,6 +483,7 @@ function stepAmount() {
       h("div", { style: "display:flex;align-items:center;gap:9px;margin:14px 0 5px" },
         h("span", { style: "font-size:12.5px;font-weight:550;color:var(--mut)" }, t("priceLabel")), unitBtn),
       priceIn,
+      (send === "BTC" && FEE_BPS > 0) ? h("p", { class: "note", style: "margin-top:12px" }, t("feeAdded", { pct: feePct() })) : null,
     ],
     cta: t("continue"),
     onCta: () => {
@@ -581,7 +605,7 @@ async function startParticipant({ coordinator, id, token }) {
     // Reopened the invite link after the swap finished (in a browser without the saved keys) — show the
     // final status read-only from the coordinator view, not the "you've been invited" join flow.
     flow.client?.stop?.(); flow.client = null;
-    flow.role = v.role; flow.direction = dirForRole(v.role);
+    flow.role = v.role; flow.direction = dirForRole(v.role); flow.fee = v.fee || null;
     flow.btcSats = v.terms?.btcSats || 0; flow.qbtSats = v.terms?.qbtSats || 0; flow.feerates = v.feerates;
     const card = h("div", { class: "card" });
     markScreen(null); render(card); return renderLive(card, v);
@@ -589,7 +613,7 @@ async function startParticipant({ coordinator, id, token }) {
   startJoinHeartbeat(coordinator, id, token);   // keep presence alive through the entering-info screens
   // Our role comes from the token (the coordinator knows which side it controls); our send/receive
   // orientation follows from it. A joiner may be the initiator (alice) if the creator was selling QBT.
-  flow.role = v.role; flow.direction = dirForRole(v.role);
+  flow.role = v.role; flow.direction = dirForRole(v.role); flow.fee = v.fee || null;
   flow.btcSats = v.terms.btcSats; flow.qbtSats = v.terms.qbtSats;
   flow.feerates = v.feerates;
   stepInvited();
@@ -597,13 +621,15 @@ async function startParticipant({ coordinator, id, token }) {
 function stepInvited() {
   rerender = stepInvited;
   const { send, recv } = roleCoins();
+  const nr = netReceive(recv, flow.feerates, feeSats() > 0);
   render(screen({
     title: t("invitedTitle"), subtitle: t("invitedSub"),
     body: [
       h("div", { class: "fund" },
-        h("div", {}, `${t("youSend")}  `, h("b", {}, `${sats(coinSats(send))} ${send}`)),
-        h("div", { style: "margin-top:4px" }, `${t("youReceive")}  `, h("b", {}, `${sats(netReceive(recv, flow.feerates).net)} ${recv}`),
-          h("span", { class: "note", style: "margin-left:6px" }, t("afterFeeShort", { fee: feeStr(recv, netReceive(recv, flow.feerates).fee) })))),
+        h("div", {}, `${t("youSend")}  `, h("b", {}, `${sats(sendSats())} ${send}`)),
+        feeBreakdown(),
+        h("div", { style: "margin-top:4px" }, `${t("youReceive")}  `, h("b", {}, `${sats(nr.net)} ${recv}`),
+          nr.fee > 0 ? h("span", { class: "note", style: "margin-left:6px" }, t("afterFeeShort", { fee: feeStr(recv, nr.fee) })) : null)),
       h("p", { class: "note" }, t("invitedNote")),
     ],
     cta: t("continue"), onCta: () => stepReceive(),
@@ -717,9 +743,10 @@ function renderLive(card, v) {
   // While waiting for the counterparty, show the deal prominently.
   if (!terminal && !addr) {
     card.append(h("div", { style: "font-size:19px;font-weight:640;letter-spacing:-.01em;margin-top:14px;line-height:1.4" },
-      t("sendingReceiving", { outAmt: `${sats(coinSats(send))} ${send}`, inAmt: `${sats(coinSats(recv))} ${recv}` }),
+      t("sendingReceiving", { outAmt: `${sats(sendSats(v))} ${send}`, inAmt: `${sats(coinSats(recv))} ${recv}` }),
       " ",
       h("span", { class: "note", style: "font-weight:400;font-size:13px" }, t("minusFees"))));
+    const fb = feeBreakdown(v); if (fb) card.append(fb);
   }
 
   if (v.securityError) { liveGuard = { risky: false }; card.append(h("p", { class: "note", style: "color:var(--bad);font-weight:600;margin-top:12px" }, t("securityErr"))); return; }
@@ -745,10 +772,11 @@ function renderLive(card, v) {
     card.append(h("div", { class: "btns", style: "margin-top:6px" },
       h("button", { onclick: () => saveFile(`qbit-swap-${flow.client.id.slice(0, 8)}-recovery.json`, exportBackup(flow.client.secrets())) }, t("downloadRecoveryBackup"))));
   }
-  // Show what the receiver will net after the (mempool High-priority) claim fee.
+  // Show what the receiver will net after the (mempool High-priority) claim fee. With a coordinator fee
+  // on, the BTC receiver nets the full amount (the fee output covers the network fee).
   if (!terminal && v.feerates && v.htlc) {
-    const { net, fee } = netReceive(recv, v.feerates);
-    card.append(h("p", { class: "note" }, t("netReceive", { net: sats(net), coin: recv, fee: feeStr(recv, fee) })));
+    const { net, fee } = netReceive(recv, v.feerates, feeSats(v) > 0);
+    card.append(h("p", { class: "note" }, fee > 0 ? t("netReceive", { net: sats(net), coin: recv, fee: feeStr(recv, fee) }) : t("netReceiveFull", { net: sats(net), coin: recv })));
   }
   if (!terminal && flow.mode === "create" && flow.inviteLink) {
     card.append(h("div", { class: "btns", style: "margin-top:8px" }, copyButton("copyInvite", "inviteCopied", () => flow.inviteLink)));
@@ -762,7 +790,8 @@ function renderLive(card, v) {
   if (!terminal && addr) {
     card.append(h("div", { class: "fund" },
       h("div", { class: "muted" }, funded ? t(funded.unconfirmed ? "coinPendingCheck" : "coinLockedCheck", { coin: send }) : t("sendExactly", { coin: send })),
-      h("div", { class: "amt" }, `${sats(coinSats(send))} ${send}`),
+      h("div", { class: "amt" }, `${sats(sendSats(v))} ${send}`),
+      feeBreakdown(v),
       funded ? null : h("div", { class: "mono", style: "margin-top:6px" }, addr),
       funded ? null : h("div", { class: "btns" }, copyButton("copyAddress", "copiedCheck", () => addr))));
   }
@@ -837,7 +866,7 @@ function renderChrome() {
 // Clicking the Qbit logo clears the current flow and returns to the home screen.
 function goHome() {
   flow.client?.stop?.(); stopJoinHeartbeat();
-  Object.assign(flow, { mode: null, role: null, direction: null, btcSats: 0, qbtSats: 0, receiveAddr: "", refundAddr: "", client: null, inviteLink: null, _recoverySaved: false });
+  Object.assign(flow, { mode: null, role: null, direction: null, btcSats: 0, qbtSats: 0, receiveAddr: "", refundAddr: "", client: null, inviteLink: null, fee: null, _recoverySaved: false });
   liveGuard = { risky: false };
   if (location.hash) history.replaceState(null, "", location.pathname + location.search);
   stepWelcome();   // always return to the hero landing, not the direction chooser

@@ -60,10 +60,13 @@ export function serializeSegwit(version, vin, vout, witnesses, locktime) {
 }
 
 // Build a signed P2WSH HTLC spend. branch: "claim" (needs preimage) or "refund" (after CLTV).
-export function btcSpend({ prevTxidLE, vout, amount, ws, priv, destSpk, outVal, branch, preimage, locktime = 0 }) {
+export function btcSpend({ prevTxidLE, vout, amount, ws, priv, destSpk, outVal, branch, preimage, locktime = 0, extraOut = null }) {
   const seq = branch === "refund" ? 0xfffffffe : 0xffffffff;
   const vin = [{ txidLE: prevTxidLE, vout, sequence: seq }];
   const outs = [{ value: BigInt(outVal), spk: destSpk }];
+  // Optional second output — the coordinator fee, on a successful claim. It's inside the signed set of
+  // outputs (the sighash below covers `outs`), so it can't be altered without re-signing.
+  if (extraOut) outs.push({ value: BigInt(extraOut.value), spk: extraOut.spk });
   const sig = ecdsaSign(priv, bip143Sighash({ version: 2, vin, vout: outs, inputIndex: 0, scriptCode: ws, amount: BigInt(amount), locktime }));
   const witness = branch === "claim" ? [sig, preimage, u8(0x01), ws] : [sig, new Uint8Array(0), ws];
   return serializeSegwit(2, vin, outs, [witness], locktime);
