@@ -105,7 +105,7 @@ const HRP = { btc: process.env.BTC_HRP || "bcrt", qbit: process.env.QBIT_HRP || 
 // and a valid key are configured; otherwise every swap is fee-free and behaves exactly as before.
 const FEE_BPS = Number(process.env.FEE_BPS || 0);                                    // basis points, e.g. 250 = 2.5%
 const FEE_KEY = process.env.FEE_DESCRIPTOR || process.env.FEE_XPUB || "";            // taproot descriptor or xpub
-const FEE_MIN_SATS = Number(process.env.FEE_MIN_SATS || 1000);                       // skip the fee below this (keeps the on-chain fee output above dust after the network fee)
+const FEE_MIN_SATS = Number(process.env.FEE_MIN_SATS || 1000);                       // below this the PLATFORM cut (bps) is skipped (would be a dust output); the network reserve is still charged
 const FEE_NETWORK = { bc: "mainnet", tb: "testnet", sb: "signet", bcrt: "regtest" }[HRP.btc] || "regtest";
 const FEE_ON = FEE_BPS > 0 && !!FEE_KEY;
 // The buyer's fee also PRE-PAYS the seller's BTC-claim network fee (sized from current conditions), so the
@@ -119,6 +119,14 @@ const FEE_NET_BUFFER = Number(process.env.FEE_NET_BUFFER || 3);
 const BTC_CLAIM_VBYTES = 208;                                                        // BTC HTLC claim + the coordinator-fee output
 export const feeNetSats = (fastestFee) => Math.ceil(BTC_CLAIM_VBYTES * Math.max(1, fastestFee || 1) * FEE_NET_BUFFER);   // dynamic: scales with the live fastest-fee rate
 const estBtcClaimFee = () => feeNetSats(cachedBtcFeerates().fastestFee);
+// Compose the swap's fee. The network-fee reserve is ALWAYS charged (it's what keeps the seller whole at
+// any swap size); FEE_MIN_SATS gates only the platform's bps cut — below it we simply drop that cut (it
+// would otherwise be a dust fee output). So "below the floor" means "the platform earns nothing on this
+// one", NEVER "the seller absorbs the network fee".
+export const composeFee = (platformRaw, netFee, feeMin) => {
+  const platform = platformRaw >= feeMin ? platformRaw : 0;
+  return { platform, netFee, sats: platform + netFee };
+};
 // Next BIP32 receive index to hand out — resumed past anything already used by persisted swaps (load()
 // has already populated `swaps`), so a restart never reissues a fee address. A fresh one per swap; gaps ok.
 let feeNextIndex = 1 + [...swaps.values()].reduce((m, s) => Math.max(m, s.fee?.index ?? -1), -1);
@@ -143,10 +151,7 @@ if (FEE_ON) {
 // A swap's coordinator fee (or null when off / below the floor): a fresh address + the sats charged.
 function deriveFee(btcSats) {
   if (!FEE_ON) return null;
-  const platform = Math.round((btcSats * FEE_BPS) / 10000);   // platform revenue: bps of the swap
-  const netFee = estBtcClaimFee();                            // + the seller's estimated BTC-claim network fee
-  const sats = platform + netFee;
-  if (sats < FEE_MIN_SATS) return null;
+  const { platform, netFee, sats } = composeFee(Math.round((btcSats * FEE_BPS) / 10000), estBtcClaimFee(), FEE_MIN_SATS);
   const index = feeNextIndex++;
   return { bps: FEE_BPS, sats, platform, netFee, index, address: feeAddress(FEE_KEY, index, FEE_NETWORK) };
 }

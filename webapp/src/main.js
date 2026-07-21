@@ -100,7 +100,8 @@ function feeBreakdown(v) {
   const { send } = roleCoins(), fee = v?.fee ?? flow.client?.view?.fee ?? flow.fee, f = feeSats(v);
   if (!(send === "BTC" && f > 0)) return null;
   const plat = fee?.platform ?? f, net = fee?.netFee ?? 0;   // fee = platform (bps) + prepaid network fee
-  return h("div", { class: "note", style: "margin-top:6px;font-size:12.5px" }, t("feeBreakdown", { swap: sats(coinSats("BTC")), plat: sats(plat), pct: feePct(v), net: sats(net) }));
+  const key = net <= 0 ? "feeBreakdownNoNet" : plat <= 0 ? "feeBreakdownNoPlat" : "feeBreakdown";   // small swaps below the platform floor → reserve only
+  return h("div", { class: "note", style: "margin-top:6px;font-size:12.5px" }, t(key, { swap: sats(coinSats("BTC")), plat: sats(plat), pct: feePct(v), net: sats(net) }));
 }
 const shorten = (s, n = 10) => (s && s.length > 2 * n ? `${s.slice(0, n)}…${s.slice(-n)}` : s);
 const trimZeros = (s) => s.replace(/0+$/, "").replace(/\.$/, "");
