@@ -103,6 +103,28 @@ Other knobs: `COORD_DB=/path/state.json` (JSON persistence; default in-memory) �
   despite BTC's ~10 min vs QBT's ~60 s blocks. `HTLC_FROM_SECS` must exceed `HTLC_TO_SECS` (enforced).
   For a fast regtest lab, set the block times to `1` and the windows to `20`/`40` (see `deploy/lab.env`).
 
+### Coordinator fee (optional — `feeaddr.js`)
+Off by default. When on, the fee is charged **on top** of the buyer's BTC deposit (the seller nets the
+full swap amount) and paid to a **fresh watch-only taproot address per swap** — the coordinator never
+holds the fee key.
+- `FEE_BPS` — platform fee in basis points (`200` = 2%). `0` (default) = fee off.
+- `FEE_XPUB` — watch-only xpub the fee addresses derive from (BIP86 taproot, path `/0/<index>`, a fresh
+  index per swap). `FEE_DESCRIPTOR` (a `tr(...)` descriptor) is accepted instead.
+- `FEE_VERIFY_ADDRESS` + `FEE_VERIFY_ADDRESS_PATH` — optional startup assertion: derive the address at
+  that path from `FEE_XPUB` and **refuse to start** unless it matches (guards a wrong/typo'd xpub).
+  Default path `0/0`.
+- `FEE_MIN_SATS` — skip the fee entirely if the total would fall below this (default `1000`).
+- `FEE_NET_BUFFER` — the quote also reserves an estimated on-chain claim fee = `208 vB × live fastest-fee
+  × FEE_NET_BUFFER` (default `3`), so a claim can outbid a fee spike between quote and claim. The claim
+  **caps** the fee it takes at this reserve, so it can never reduce the seller's amount; the platform
+  keeps the unused remainder. Tune up for more spike headroom (bigger quote), down when fees are
+  structurally high (the multiplier already grows the absolute reserve). Not a safety knob — the cap
+  protects the seller at any value.
+
+### Minimum swap value
+- `MIN_BTC_SATS` / `MIN_QBT_SATS` — reject swaps below these (default `50000` / `200000`), kept above the
+  largest claim/refund fee + dust. The web app reads them (injected) to validate up front.
+
 ## Run the demos
 Needs the two regtest nodes up (see `../wasm`/`../js`). Then:
 ```sh
