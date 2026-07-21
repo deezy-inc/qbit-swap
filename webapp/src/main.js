@@ -62,6 +62,13 @@ const coinLeg = (coin) => (coin === "BTC" ? "btc" : "qbit");
 const sats = (n) => (n / 1e8).toLocaleString(undefined, { maximumFractionDigits: 8 });   // DISPLAY only (grouped) — never write this into an <input>: its thousands comma breaks parseFloat on re-read
 const amtStr = (n) => (n / 1e8).toFixed(8).replace(/0+$/, "").replace(/\.$/, "");         // plain, grouping-free — safe to round-trip through an input field
 const fmtHMS = (ms) => { const s = Math.max(0, Math.floor(ms / 1000)); return `${Math.floor(s / 3600)}:${String(Math.floor(s % 3600 / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`; };   // H:MM:SS countdown
+// Swaps whose receive/refund addresses were TYPED in THIS browser (the create/join/take flow) — so it
+// already knows they're its own and the address-verification gate is skipped. A different browser/device
+// that only RESUMED the swap (permalink or imported backup) has no mark, so it still gets the gate. Stored
+// in localStorage (per-browser) and NOT part of the exportable backup, so importing elsewhere re-gates.
+const ENTERED_KEY = "qbit-entered-addrs";
+const enteredAddrsHere = (id) => { try { return JSON.parse(localStorage.getItem(ENTERED_KEY) || "[]").includes(id); } catch { return false; } };
+const markEnteredAddrs = (id) => { try { const a = JSON.parse(localStorage.getItem(ENTERED_KEY) || "[]"); if (id && !a.includes(id)) localStorage.setItem(ENTERED_KEY, JSON.stringify([...a, id].slice(-200))); } catch {} };
 const toSats = (v) => Math.round(parseFloat(String(v).replace(/,/g, "")) * 1e8);          // tolerate a stray grouping comma (en/zh use it as a thousands separator) so "4,441.4" isn't read as 4
 const DUST_UI = 546;
 // ── coordinator fee (optional) ────────────────────────────────────────────────
@@ -384,6 +391,7 @@ async function doTake() {
   flow.client = mkClient({ coordinator: flow.coordinator || DEFAULT_COORD });
   await flow.client.enter({ id: flow.takeSwapId, token: flow.takeToken, direction: "btc2qbt", role: flow.role, ...destsForClient() });
   await vault.save(flow.client.secrets());
+  markEnteredAddrs(flow.client.id);
   stepBackup(() => startLive());
 }
 // Trade directly with a peer (create a private swap + share a link) for the chosen direction.
@@ -573,6 +581,7 @@ async function doCreate() {
   const res = await flow.client.create({ role: flow.role, btcSats: flow.btcSats, qbtSats: flow.qbtSats, securityLevel: "high", ...destsForClient() });
   flow.inviteLink = res.inviteLink;
   await vault.save(flow.client.secrets());
+  markEnteredAddrs(flow.client.id);   // this browser typed its own addresses → skip the verify gate here
   stepBackup(() => stepShare());
 }
 async function doJoin() {
@@ -584,6 +593,7 @@ async function doJoin() {
     throw e;
   }
   await vault.save(flow.client.secrets());
+  markEnteredAddrs(flow.client.id);
   stepBackup(() => startLive());
 }
 
@@ -875,10 +885,10 @@ function renderLive(card, v) {
       h("div", { style: "font-size:16px;font-weight:600;color:var(--bad)" }, t("fundExpiredTitle")),
       h("p", { class: "note", style: "margin-top:6px" }, t("fundExpiredBody")),
       h("div", { class: "btns", style: "margin-top:14px" }, h("button", { class: "primary", style: "width:100%", onclick: () => goHome() }, t("verifyLeave"))));
-  } else if (!terminal && addr && !funded && !flow.verified) {
-    // Gate the deposit address behind an explicit address check. A counterparty could hand you a link
-    // where the receive/refund addresses aren't yours; you must confirm they're YOURS before any coins
-    // move — so a naive user can't be talked into "just send to this address."
+  } else if (!terminal && addr && !funded && !flow.verified && !enteredAddrsHere(v.id)) {
+    // Gate the deposit address behind an explicit address check — but ONLY when this browser didn't type
+    // its own addresses (a resumed/forwarded link on a different device could carry tampered addresses).
+    // The session that just entered its addresses already knows they're its own, so it skips the gate.
     action = h("div", { class: "fund" },
       h("div", { style: "font-size:16px;font-weight:600" }, t("verifyGateTitle")),
       h("p", { class: "note", style: "margin-top:6px" }, t("verifyGateSub")),

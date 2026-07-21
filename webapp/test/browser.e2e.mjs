@@ -55,14 +55,8 @@ async function runDirection(browser, choiceText, label) {
   await B.waitForSelector("text=Your counterparty is online", { timeout: 20000 });
   console.log("  presence: both see counterparty online ✓");
 
-  // Address verification gate: each side must confirm their receive + refund addresses before the
-  // deposit address is revealed.
-  for (const pg of [A, B]) {
-    await pg.getByRole("button", { name: "Begin verification", exact: true }).click({ timeout: 20000 });
-    await clickBtn(pg, "Yes, it's mine");   // receiving address
-    await clickBtn(pg, "Yes, it's mine");   // refund address
-  }
-  console.log("  both verified their addresses ✓");
+  // No address-verification gate here: each side TYPED its own receive/refund addresses in this browser,
+  // so it's skipped (the gate only shows for a different browser that merely resumed the swap).
 
   // Sequenced funding: the BTC (buyer) deposit address shows immediately; the QBT (seller) address is
   // withheld until the BTC deposit confirms. So fund BTC first, then the QBT side once it unlocks.
