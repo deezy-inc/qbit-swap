@@ -97,9 +97,10 @@ function netReceive(recv, feerates, feeOn = false) {
 const feeStr = (coin, fee) => (coin === "BTC" ? `${fee.toLocaleString()} sat` : `${sats(fee)} QBT`);
 // A one-line breakdown shown to the BTC sender (buyer) when a platform fee applies: swap + fee = total.
 function feeBreakdown(v) {
-  const { send } = roleCoins(), f = feeSats(v);
+  const { send } = roleCoins(), fee = v?.fee ?? flow.client?.view?.fee ?? flow.fee, f = feeSats(v);
   if (!(send === "BTC" && f > 0)) return null;
-  return h("div", { class: "note", style: "margin-top:6px;font-size:12.5px" }, t("feeBreakdown", { swap: sats(coinSats("BTC")), fee: sats(f), pct: feePct(v) }));
+  const plat = fee?.platform ?? f, net = fee?.netFee ?? 0;   // fee = platform (bps) + prepaid network fee
+  return h("div", { class: "note", style: "margin-top:6px;font-size:12.5px" }, t("feeBreakdown", { swap: sats(coinSats("BTC")), plat: sats(plat), pct: feePct(v), net: sats(net) }));
 }
 const shorten = (s, n = 10) => (s && s.length > 2 * n ? `${s.slice(0, n)}…${s.slice(-n)}` : s);
 const trimZeros = (s) => s.replace(/0+$/, "").replace(/\.$/, "");

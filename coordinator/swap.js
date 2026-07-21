@@ -108,6 +108,17 @@ const FEE_KEY = process.env.FEE_DESCRIPTOR || process.env.FEE_XPUB || "";       
 const FEE_MIN_SATS = Number(process.env.FEE_MIN_SATS || 1000);                       // skip the fee below this (keeps the on-chain fee output above dust after the network fee)
 const FEE_NETWORK = { bc: "mainnet", tb: "testnet", sb: "signet", bcrt: "regtest" }[HRP.btc] || "regtest";
 const FEE_ON = FEE_BPS > 0 && !!FEE_KEY;
+// The buyer's fee also PRE-PAYS the seller's BTC-claim network fee (sized from current conditions), so the
+// seller nets the full amount and the platform's bps isn't silently eaten when fees are high. The bps
+// portion is an extra cushion: the seller only loses if the actual claim fee overshoots estimate + bps.
+// Aggressive by design: the buyer reserves a generous network-fee headroom so the claim can outbid a fee
+// spike between quote and claim. It costs the buyer little and the CLAIM caps the fee it actually takes at
+// this reserve (see btcClaimSplit), so it can never eat into the seller's amount — worst case the unused
+// reserve just stays with the platform.
+const FEE_NET_BUFFER = Number(process.env.FEE_NET_BUFFER || 3);
+const BTC_CLAIM_VBYTES = 208;                                                        // BTC HTLC claim + the coordinator-fee output
+export const feeNetSats = (fastestFee) => Math.ceil(BTC_CLAIM_VBYTES * Math.max(1, fastestFee || 1) * FEE_NET_BUFFER);   // dynamic: scales with the live fastest-fee rate
+const estBtcClaimFee = () => feeNetSats(cachedBtcFeerates().fastestFee);
 // Next BIP32 receive index to hand out — resumed past anything already used by persisted swaps (load()
 // has already populated `swaps`), so a restart never reissues a fee address. A fresh one per swap; gaps ok.
 let feeNextIndex = 1 + [...swaps.values()].reduce((m, s) => Math.max(m, s.fee?.index ?? -1), -1);
@@ -132,10 +143,12 @@ if (FEE_ON) {
 // A swap's coordinator fee (or null when off / below the floor): a fresh address + the sats charged.
 function deriveFee(btcSats) {
   if (!FEE_ON) return null;
-  const sats = Math.round((btcSats * FEE_BPS) / 10000);
+  const platform = Math.round((btcSats * FEE_BPS) / 10000);   // platform revenue: bps of the swap
+  const netFee = estBtcClaimFee();                            // + the seller's estimated BTC-claim network fee
+  const sats = platform + netFee;
   if (sats < FEE_MIN_SATS) return null;
   const index = feeNextIndex++;
-  return { bps: FEE_BPS, sats, index, address: feeAddress(FEE_KEY, index, FEE_NETWORK) };
+  return { bps: FEE_BPS, sats, platform, netFee, index, address: feeAddress(FEE_KEY, index, FEE_NETWORK) };
 }
 
 // ── HTLC timelocks, in WALL-CLOCK time (not raw blocks) ───────────────────────────────────────

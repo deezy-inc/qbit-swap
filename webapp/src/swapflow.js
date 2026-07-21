@@ -301,10 +301,11 @@ export class SwapClient {
     // address. The buyer funded it on top of the swap amount, so the seller still nets the full swap
     // amount; the claim's own network fee (feeSats) is taken out of the fee output (per policy). No fee
     // on refunds. Dropped if it would be dust (claim still confirms; the fee is just skipped that time).
-    let extraOut = null, outVal = f.amountSats - feeSats;
+    let extraOut = null, outVal = f.amountSats - feeSats;   // no coordinator fee → the claimer pays the network fee from its own amount
     if (branch === "claim" && v.fee?.sats > 0 && v.fee.address) {
-      const feeOutVal = v.fee.sats - feeSats;
-      if (feeOutVal > DUST) { extraOut = { spk: addressToScriptPubKey(v.fee.address), value: feeOutVal }; outVal = f.amountSats - v.fee.sats; }
+      const split = btcClaimSplit(f.amountSats, feeSats, v.fee.sats);   // seller stays whole; network fee capped at the reserve
+      outVal = split.outVal;
+      if (split.feeOut != null) extraOut = { spk: addressToScriptPubKey(v.fee.address), value: split.feeOut };
     }
     return btcSpend({ prevTxidLE: bin(f.txid).reverse(), vout: f.vout, amount: f.amountSats, ws, priv: this.btcPriv, destSpk, outVal, branch, preimage, locktime: branch === "refund" ? v.locktimes.btc : 0, extraOut });
   }
@@ -314,6 +315,16 @@ export class SwapClient {
 // picks/escalates tiers using live feerates when it must act for an offline party. BTC spans
 // economy→extreme; Qbit is uncongested so a low pair suffices.
 const DUST = 546;
+// BTC claim outputs when the buyer pre-paid a fee (funding = swap amount + fee reserve). The seller ALWAYS
+// nets the full swap amount (funding − feeTotal); the network fee we actually take is CAPPED at feeTotal,
+// so however high fees have risen it can never eat into the seller's amount. The platform keeps whatever
+// the (capped) network fee didn't consume — dropped if that remainder would be dust (then the leftover, at
+// most feeTotal, simply becomes the network fee, still leaving the seller whole).
+export function btcClaimSplit(funding, netFee, feeTotal) {
+  const outVal = funding - feeTotal;                                       // seller's agreed amount, always
+  const feeOut = feeTotal - Math.min(Math.max(0, netFee), feeTotal);       // platform remainder after the capped network fee
+  return { outVal, feeOut: feeOut > DUST ? feeOut : null };
+}
 // Public broadcast endpoints for the coordinator-down fallback (#send), keyed by network hrp. Both chains
 // are openly relayable, so we ship a fallback for EITHER leg: each endpoint accepts a raw tx hex as the
 // POST body and returns the txid (Esplora-style). Regtest ("bcrt"/"qbrt") has no public endpoint → empty.
