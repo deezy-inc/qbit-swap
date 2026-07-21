@@ -9,8 +9,10 @@
 //   esplora  — mempool.space / Esplora REST API (BTC leg only; no own Bitcoin node needed). Set
 //              ESPLORA_URL (default https://mempool.space/api). Includes rate-limit handling.
 //
-// Qbit has no public backend, so the QBT leg must use "dev" or "rpc" against your own qbitd — and the
-// reorg-safe confirmation gate (getconfirmationtarget) is a qbitd RPC.
+// The "esplora" backend is the mempool.space/Esplora REST client (BTC only), so the coordinator runs the
+// QBT leg as "dev" or "rpc" against a qbitd — which also serves the reorg-safe confirmation gate
+// (getconfirmationtarget), a qbitd RPC. (This is about the coordinator's own data source; it says nothing
+// about how broadcastable QBT is — like BTC, anyone can relay a QBT tx to a public node.)
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { sha256 } from "@noble/hashes/sha2.js";

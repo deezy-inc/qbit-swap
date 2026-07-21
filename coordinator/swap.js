@@ -478,8 +478,8 @@ export async function driveWatchtower(s) {
   }
   // d) Fee management for the watchtower's own claims. We (re)broadcast ONLY when the funding is
   //    genuinely unspent ON-CHAIN (mempool included) — i.e. no claim is in flight or mined, whether ours
-  //    (dropped/evicted) or the party's OWN out-of-band tx (their backup file, their node, the BTC
-  //    direct-broadcast fallback). We never RBF a claim already in the mempool: it may be the party's,
+  //    (dropped/evicted) or the party's OWN out-of-band tx (their backup file, their own node, or the
+  //    client's direct-broadcast fallback on EITHER leg). We never RBF a claim already in the mempool: it may be the party's,
   //    and trampling it is worse than waiting out the (generous) timelock; a genuinely underpriced tx
   //    gets evicted under fee pressure → funding unspent → re-sent here. The re-send follows the LIVE
   //    fastest-fee recommendation, floored at the tier last used — so a drop for a non-fee reason

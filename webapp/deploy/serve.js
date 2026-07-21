@@ -36,6 +36,9 @@ const cfg = [
   process.env.ORDERBOOK ? "window.QBIT_ORDERBOOK=true;" : "",
   process.env.RECENT_TRADES ? "window.QBIT_RECENT_TRADES=true;" : "",
   process.env.FEE_BPS ? `window.QBIT_FEE_BPS=${Number(process.env.FEE_BPS) || 0};` : "",   // pre-create fee estimate; authoritative amount comes from the swap view
+  // Browser-reachable QBT broadcast endpoints for the coordinator-down fallback, per network hrp. JSON
+  // like {"qb":["https://.../api/tx"]}. Esplora-style: raw tx hex POST body, txid response.
+  process.env.QBIT_BROADCAST_URLS ? `window.QBIT_BROADCAST_URLS=${process.env.QBIT_BROADCAST_URLS};` : "",
 ].join("");
 const CONFIG = `<script>${cfg}</script>`;
 

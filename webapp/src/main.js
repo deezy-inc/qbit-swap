@@ -13,7 +13,7 @@ const HRPS = globalThis.QBIT_HRPS || { btc: "bcrt", qbit: "qbrt" };
 const KNOWN_HRPS = ["bcrt", "bc", "tb", "sb", "qbrt", "qbt", "tqb", "qb"];
 // All SwapClients get the BTC network (hrp) so they can fall back to a direct public broadcast of the
 // BTC leg if the coordinator is unreachable while the tab is open (see swapflow.js #send).
-const mkClient = (opts) => new SwapClient({ btcHrp: HRPS.btc, ...opts });
+const mkClient = (opts) => new SwapClient({ btcHrp: HRPS.btc, qbitHrp: HRPS.qbit, ...opts });
 // Is `addr` on the specific network `expectedHrp`? bech32 by hrp; btc legacy base58 by mainnet-vs-test.
 function addressOnNetwork(addr, expectedHrp) {
   const a = addr.trim(), l = a.toLowerCase(), sep = l.lastIndexOf("1");

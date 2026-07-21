@@ -18,16 +18,17 @@ import {
 const rand = (n) => globalThis.crypto.getRandomValues(new Uint8Array(n));
 
 export class SwapClient {
-  constructor({ coordinator, onUpdate = () => {}, feeSats = { qbit: 100000, btc: 5000 }, btcHrp = "bc" }) {
+  constructor({ coordinator, onUpdate = () => {}, feeSats = { qbit: 100000, btc: 5000 }, btcHrp = "bc", qbitHrp = "qb" }) {
     this.base = coordinator.replace(/\/$/, "");
     this.onUpdate = onUpdate;
     this.feeSats = feeSats;
     this.acted = new Set();
-    // Direct-broadcast fallback for the BTC leg (see #send): public HTTP endpoints keyed by network. We
-    // ship no equivalent browser-reachable QBT broadcast endpoint, so from the browser the coordinator is
-    // our QBT relay path (a node operator can of course relay QBT out-of-band — we never rely on it being
-    // hard to relay; swap safety comes from the protocol, not from gating relay). Regtest/unknown → none.
+    // Direct-broadcast fallback endpoints for the coordinator-down path (see #send), keyed by network.
+    // BOTH chains are openly relayable — this browser can push a signed tx straight to a public node on
+    // either leg — so we keep a fallback for each. QBT is no more "coordinator-only" than BTC; swap safety
+    // never rests on relay being gated (it comes from the funding order + waiting for burial). Empty → none.
     this.btcBroadcast = BTC_BROADCAST[btcHrp] || [];
+    this.qbitBroadcast = QBIT_BROADCAST[qbitHrp] || [];
   }
 
   // Retries transient failures (network drop, coordinator restart/blip, 5xx/429) so an in-flight
@@ -185,19 +186,19 @@ export class SwapClient {
     }
   }
   // Broadcast a signed claim/refund. Primary path is the coordinator (it relays to both chains' nodes
-  // and updates its view). If the coordinator is unreachable, the BTC leg can still be pushed to the
-  // network directly via public broadcast APIs — so a backend outage never traps your Bitcoin
-  // claim/refund while this tab is open. We ship no browser-reachable QBT broadcast endpoint, so from
-  // this tab QBT goes via the coordinator (this is a browser-reachability gap, not a safety assumption).
+  // and updates its view). If the coordinator is unreachable, the tx can still be pushed straight to the
+  // network via public broadcast APIs — for EITHER leg, since both BTC and QBT are openly relayable — so
+  // a backend outage never traps your claim/refund while this tab is open.
   async #send(leg, kind, tx) {
     const key = `${leg}:${kind}`, txHex = hex(tx);
     this.acted.add(key);   // guard against a duplicate fire on the next tick while this send is in flight
     try {
       return await this.#api(`/swaps/${this.id}/broadcast`, { token: this.token, method: "POST", body: { leg, kind, tx: txHex } });
     } catch (e) {
-      if (leg === "btc" && this.btcBroadcast.length) {
+      const endpoints = leg === "btc" ? this.btcBroadcast : this.qbitBroadcast;
+      if (endpoints.length) {
         try {
-          const txid = await this.#broadcastDirect(txHex);
+          const txid = await postRawTx(endpoints, txHex);
           this.onUpdate({ ...this.view, broadcastFallback: { leg, kind, txid } });   // surface that we bypassed the coordinator
           return { fallback: true, txid };
         } catch (fe) { this.acted.delete(key); throw fe; }
@@ -206,7 +207,6 @@ export class SwapClient {
       throw e;
     }
   }
-  #broadcastDirect(txHex) { return postRawTx(this.btcBroadcast, txHex); }
 
   // ── watchtower safety net: pre-sign and upload a fee-ladder claim + a refund ──
   async armSafetyNet(v) {
@@ -293,13 +293,18 @@ export class SwapClient {
 // picks/escalates tiers using live feerates when it must act for an offline party. BTC spans
 // economy→extreme; Qbit is uncongested so a low pair suffices.
 const DUST = 546;
-// Public BTC broadcast endpoints for the coordinator-down fallback (#send), keyed by the BTC hrp
-// (network). They accept a raw tx hex as the POST body and return the txid. We ship no equivalent
-// browser-reachable QBT endpoint, so there's no in-tab QBT fallback (a node operator can still relay QBT
-// out-of-band). Regtest ("bcrt") has no public endpoint → empty (disabled).
+// Public broadcast endpoints for the coordinator-down fallback (#send), keyed by network hrp. Both chains
+// are openly relayable, so we ship a fallback for EITHER leg: each endpoint accepts a raw tx hex as the
+// POST body and returns the txid (Esplora-style). Regtest ("bcrt"/"qbrt") has no public endpoint → empty.
+// QBT endpoints can be injected per-deploy via window.QBIT_BROADCAST_URLS = { qb: [...], tqb: [...] } so
+// they aren't pinned in-source; a hardcoded default can be added here once stable.
 export const BTC_BROADCAST = {
   bc: ["https://mempool.space/api/tx", "https://blockstream.info/api/tx"],
   tb: ["https://mempool.space/testnet4/api/tx", "https://blockstream.info/testnet/api/tx"],
+};
+export const QBIT_BROADCAST = {
+  qb: (globalThis.QBIT_BROADCAST_URLS?.qb) || [],
+  tqb: (globalThis.QBIT_BROADCAST_URLS?.tqb) || [],
 };
 // POST a raw tx hex to each endpoint in turn; return the first accepted txid, or throw if none accept.
 // Injectable fetch for testing. Used by the coordinator-down BTC broadcast fallback.

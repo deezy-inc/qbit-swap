@@ -76,8 +76,9 @@ pre-signing before it tells you it's safe to close (`webapp/README.md`); proven 
 The coordinator only does chain **reads + broadcast** (it's keyless). Each chain picks a backend via
 env — see `coordinator/chain.js`:
 
-- **Qbit — required: your own `qbitd`.** There's no public Qbit backend, and the reorg-safe conf gate
-  is a `qbitd` RPC. Use `QBIT_BACKEND=rpc` + `QBIT_RPC_URL=...`.
+- **Qbit — required: your own `qbitd`.** The coordinator ships no Esplora-style QBT data client, and the
+  reorg-safe conf gate is a `qbitd` RPC, so point it at your own node: `QBIT_BACKEND=rpc` +
+  `QBIT_RPC_URL=...`. (This is only the coordinator's data source — QBT txs are as broadcastable as BTC.)
 - **Bitcoin — three options:**
 
   | `BTC_BACKEND` | Node | Disk | Rough $/mo (AWS) | Notes |

@@ -86,8 +86,8 @@ Each chain picks a backend via `<CHAIN>_BACKEND` (falls back to `COORD_CHAIN`, t
   for funding *detection*; parties refund with their own keys.) `WATCH_WALLET` sets the wallet name.
 - **`esplora`** — mempool.space / self-hosted electrs REST for the **BTC leg** (no Bitcoin node needed);
   set `ESPLORA_URL` (default `https://mempool.space/api`). Indexed scripthash lookups + built-in
-  rate-limit handling (`ESPLORA_MIN_INTERVAL_MS`, `ESPLORA_MAX_RETRIES`). Qbit has no public backend, so
-  the QBT leg must use `dev`/`rpc` against your own `qbitd`.
+  rate-limit handling (`ESPLORA_MIN_INTERVAL_MS`, `ESPLORA_MAX_RETRIES`). This backend is BTC-only, so the
+  QBT leg uses `dev`/`rpc` against your own `qbitd` (its data source — unrelated to how broadcastable QBT is).
 
 Other knobs: `COORD_DB=/path/state.json` (JSON persistence; default in-memory) · `RATE_MAX=120`
 (per-IP writes/min) · `DEV_CONFS_CAP` (cap the reorg-safe conf gate on hashrate-less regtest).
