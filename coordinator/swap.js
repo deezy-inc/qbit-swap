@@ -320,7 +320,7 @@ export async function poll(s) {
     if (!cur || cur.unconfirmed) {
       const o = await chainOf(leg).findOutput(s.htlc[leg].spk);
       if (o && o.amountSats >= need[leg]) s.funding[leg] = { txid: o.txid, vout: o.vout, amountSats: o.amountSats, height: o.height, unconfirmed: o.height == null, spent: false };
-      else if (o) s.shortFunded = { ...(s.shortFunded || {}), [leg]: { got: o.amountSats, need: need[leg] } };
+      else if (o) s.shortFunded = { ...(s.shortFunded || {}), [leg]: { got: o.amountSats, need: need[leg], txid: o.txid } };   // txid so the app can link the underfunded deposit (refundable after its timelock)
       else if (cur && cur.unconfirmed) s.funding[leg] = null;   // unconfirmed deposit dropped out of the mempool
     }
   }

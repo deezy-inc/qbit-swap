@@ -185,6 +185,9 @@
   /* The "do this now" box, rendered inline on the active step: reclaim the icon+gap indent (22+11px) so
      the deposit address still spans the full card width and fits on one line. */
   .tl-body .fund { margin:10px 0 4px -33px; }
+  /* Paused (underfunded): cross out the steps that can no longer proceed. */
+  .tl-step.paused .tl-label { text-decoration:line-through; color:var(--mut); font-weight:400; }
+  .tl-step.paused .tl-icon { animation:none; opacity:.5; }
 
   /* status badge — soft tinted fill, not just an outline */
   .badge { display:inline-flex; align-items:center; gap:6px; padding:4px 11px; border-radius:999px;

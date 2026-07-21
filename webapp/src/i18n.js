@@ -216,7 +216,8 @@ const en = {
   amtTooSmall: "Amount too small — minimum {btc} BTC and {qbt} QBT.",
   downloadRecoveryBackup: "Download backup with recovery txs",
   leaveWarn: "Your safety net isn't set up yet — if you leave now you'll need to come back to finish or get a refund.",
-  underfundWarn: "⚠ A deposit came in below the agreed amount, so the swap is paused. An underfunded deposit can be refunded after its timelock.",
+  underfundWarn: "⚠ A deposit came in below the agreed amount, so the swap is paused. The underfunded deposit can be refunded after its timelock.",
+  viewDeposit: "view deposit ↗",
   securityErr: "⚠ Security check failed — the swap's addresses don't match your keys. Do NOT send any funds. Refresh the page or start over.",
 };
 const zh = {
@@ -428,6 +429,7 @@ const zh = {
   downloadRecoveryBackup: "下载含恢复交易的备份",
   leaveWarn: "您的安全网尚未设置——如果现在离开，您需要回来才能完成或退款。",
   underfundWarn: "⚠ 有一笔存款低于约定金额，兑换已暂停。金额不足的存款可在其时间锁到期后退款。",
+  viewDeposit: "查看存款 ↗",
   securityErr: "⚠ 安全校验失败——兑换地址与您的密钥不匹配。请勿发送任何资金。请刷新页面或重新开始。",
 };
 const DICTS = { en, zh };

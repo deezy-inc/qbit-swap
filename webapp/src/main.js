@@ -750,7 +750,7 @@ async function btcConfEta(txid) {
 // A persistent progress timeline for the swap: every step stays visible (matched → you sent →
 // counterparty sent → you received / refunded), each with a checkmark and a link to the transaction
 // on a public explorer, so the whole history — including the final txid — remains on the page.
-function swapTimeline(v, send, recv, action) {
+function swapTimeline(v, send, recv, action, paused) {
   const fundLeg = coinLeg(send), claimLeg = coinLeg(recv);
   const myFund = v.funding?.[fundLeg], cpFund = v.funding?.[claimLeg];
   const myClaim = v.broadcasts?.[`${claimLeg}:claim`];      // the tx that delivers your received coin
@@ -779,7 +779,8 @@ function swapTimeline(v, send, recv, action) {
   let activeSet = false;
   return h("div", { class: "timeline" }, ...steps.map((s) => {
     const state = s.done ? "done" : (!activeSet && (activeSet = true) ? "active" : "todo");
-    return h("div", { class: "tl-step " + state },
+    // Paused (underfunded) → strike the steps that can no longer proceed (everything not already done).
+    return h("div", { class: "tl-step " + state + (paused && !s.done ? " paused" : "") },
       h("span", { class: "tl-icon " + state }, s.done ? "✓" : ""),   // upcoming steps: a hollow ring (the border), no inner dot
       h("div", { class: "tl-body" },
         h("span", { class: "tl-label" }, s.label(s.reached ?? s.done)),
@@ -862,6 +863,7 @@ function renderLive(card, v) {
   // It renders INLINE on the active timeline step below — not as a banner above the timeline — so the page
   // reads top-to-bottom and the action sits on the step we're actually on. It's null once there's nothing
   // to do (our own deposit is buried, or we're only waiting on the counterparty — the timeline says so).
+  const shorted = !terminal && !!v.shortFunded;   // a deposit came in below the agreed amount → swap paused
   let action = null;
   if (!terminal && addr && expired) {
     // The funding window elapsed — the timelocks were fixed at setup, so funding this late is no longer
@@ -912,35 +914,42 @@ function renderLive(card, v) {
   // Persistent progress timeline — the primary structure — with the action box inlined on the current
   // step, so it's always clear which step we're on. Each step keeps its explorer tx link, incl. after
   // completion; its per-step "in mempool" tag surfaces 0-conf deposit detection on both legs.
-  if (v.htlc) card.append(swapTimeline(v, send, recv, action));
+  if (shorted) action = null;   // the "send exactly X" prompt is moot once an underfunded deposit exists — cross out the flow instead
+  if (v.htlc) card.append(swapTimeline(v, send, recv, action, shorted));
   else if (action) card.append(action);   // pre-HTLC edge (addr implies htlc, so rare) — keep the action visible
   // Bottom status line only when there's NO inline action box — otherwise it just repeats the prominent
   // in-timeline status (e.g. "waiting for the BTC deposit to confirm"). With an action shown, it's noise.
-  if (!action) card.append(h("p", { class: "note" }, statusLine(v, send, recv)));
+  if (!action && !shorted) card.append(h("p", { class: "note" }, statusLine(v, send, recv)));   // paused → the warning below is the status
 
   // A deposit confirmed so slowly that it's now unsafe to complete — the swap will refund on its own.
   if (!terminal && v.tooLate) card.append(h("p", { class: "note", style: "color:var(--warn);font-weight:600;margin-top:10px" }, t("tooLateRefund")));
   // Below the timeline: what the receiver nets after the claim fee, the invite-copy, and the back link.
-  if (!terminal && v.feerates && v.htlc) {
+  // All moot once paused (underfunded), so skip them then.
+  if (!terminal && !shorted && v.feerates && v.htlc) {
     const { net, fee } = netReceive(recv, v.feerates, feeSats(v) > 0);
     card.append(h("p", { class: "note" }, fee > 0 ? t("netReceive", { net: sats(net), coin: recv, fee: feeStr(recv, fee) }) : t("netReceiveFull", { net: sats(net), coin: recv })));
   }
-  if (!terminal && flow.mode === "create" && flow.inviteLink) {
+  if (!terminal && !shorted && flow.mode === "create" && flow.inviteLink) {
     card.append(h("div", { class: "btns", style: "margin-top:8px" }, copyButton("copyInvite", "inviteCopied", () => flow.inviteLink)));
   }
   if (!terminal && !addr && flow.mode === "create") {
     card.append(h("div", { style: "margin-top:14px" },
       h("a", { href: "#", style: "color:var(--mut)", onclick: (e) => { e.preventDefault(); stepShare(); } }, t("back"))));
   }
-  if (!terminal && v.shortFunded) card.append(h("p", { class: "note", style: "color:var(--bad)" }, t("underfundWarn")));
+  if (shorted) {
+    card.append(h("p", { class: "note", style: "color:var(--bad);font-weight:600;margin-top:12px" },
+      t("underfundWarn"),
+      ...Object.keys(v.shortFunded).map((leg) => v.shortFunded[leg]?.txid
+        ? h("span", {}, " ", h("a", { href: EXPLORER[leg] + v.shortFunded[leg].txid, target: "_blank", rel: "noopener", style: "color:var(--accent);white-space:nowrap" }, t("viewDeposit"))) : null)));
+  }
   if (v.actionError) card.append(h("p", { class: "note", style: "color:var(--bad)" }, "⚠ " + v.actionError));
-  // Either party can cancel while NOTHING is funded — clears stale swaps; the counterparty sees it.
+  // Either party can cancel while NOTHING is confirmed-funded — clears stale swaps; the counterparty sees it.
+  // Once paused (underfunded), cancelling is the sensible next move, so show it as a real button.
   if (!terminal && !v.funding?.btc && !v.funding?.qbit) {
-    card.append(h("div", { style: "margin-top:16px;text-align:center" },
-      h("a", { href: "#", style: "color:var(--mut);font-size:13px", onclick: async (e) => {
-        e.preventDefault(); if (!confirm(t("cancelConfirm"))) return;
-        try { await flow.client.cancel(); } catch (err) { alert(err.message); }
-      } }, t("cancelSwap"))));
+    const doCancel = async (e) => { e.preventDefault(); if (!confirm(t("cancelConfirm"))) return; try { await flow.client.cancel(); } catch (err) { alert(err.message); } };
+    card.append(shorted
+      ? h("div", { class: "btns", style: "margin-top:16px" }, h("button", { class: "btn-ghost", style: "width:100%", onclick: doCancel }, t("cancelSwap")))
+      : h("div", { style: "margin-top:16px;text-align:center" }, h("a", { href: "#", style: "color:var(--mut);font-size:13px", onclick: doCancel }, t("cancelSwap"))));
   }
   // Keep the finished swap in the vault (marked done) rather than purging it, so reopening its link or
   // permalink resumes straight to this final status instead of the join flow. It's filtered out of the
