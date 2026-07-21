@@ -70,12 +70,16 @@ function touch(s) {
 }
 
 // ── presence (drives "counterparty online") ──────────────────────────────────
-// A role is online if it holds an open SSE connection OR has hit the API recently — so both a browser
-// (SSE) and a polling bot register, with no extra ping endpoint. Transitions push to the counterparty.
-const ONLINE_MS = 15000;
+// A role is online if it has hit the API recently — the SSE connect, the client's ~6s heartbeat, or a
+// polling bot's requests all refresh `seen`. We deliberately do NOT treat an open SSE socket as proof of
+// life: through the Cloudflare tunnel a closed browser tab's socket can linger at the origin (the `close`
+// event never fires), so a socket-count signal reads "online" forever and used to freeze the watchtower.
+// Recency of an actual client-originated request can't be faked by a dead connection. (Presence is now a
+// UI signal only — the watchtower acts on chain state regardless.)
+const ONLINE_MS = 20000;   // > 3× the client heartbeat, so one dropped beat doesn't flap the indicator
 const nowMs = () => Date.now();
 const presenceOf = (s) => (s.presence ||= { alice: { sse: 0, seen: 0 }, bob: { sse: 0, seen: 0 } });
-export const isOnline = (s, role) => { const p = presenceOf(s)[role]; return p.sse > 0 || nowMs() - p.seen < ONLINE_MS; };
+export const isOnline = (s, role) => nowMs() - presenceOf(s)[role].seen < ONLINE_MS;
 function onPresenceChange(s, role, mutate) { const before = isOnline(s, role); mutate(presenceOf(s)[role]); if (isOnline(s, role) !== before) emit(s); }
 export function markSeen(id, role) { const s = swaps.get(id); if (s) onPresenceChange(s, role, (p) => { p.seen = nowMs(); }); }
 export function addConnection(id, role) { const s = swaps.get(id); if (s) onPresenceChange(s, role, (p) => { p.sse++; p.seen = nowMs(); }); }
@@ -155,6 +159,12 @@ const locktimeBlocks = (leg, secs) => Math.max(1, Math.ceil(secs / BLOCK_SECS[le
 const REORG_MARGIN = Number(process.env.REORG_MARGIN || 3);                 // cost-to-reorg ≥ this × swap value
 const MIN_CONFS = { btc: Number(process.env.MIN_CONFS_BTC || 1), qbit: Number(process.env.MIN_CONFS_QBIT || 1) };   // never 0-conf, but otherwise let the value-scaled math decide
 const UNPRICED_CONFS = Number(process.env.UNPRICED_CONFS || 6);   // conservative fallback when the reorg cost can't be priced (node model unavailable)
+// Funding deadline: once the HTLCs are derived (READY), both parties must fund within this window, or
+// the swap is treated as expired — because the timelocks are fixed at READY time, funding much later
+// would leave too little margin before the refund unlocks (and, past the timelock, is outright unsafe).
+// Kept well under the shortest timelock. Regtest overrides it tiny for tests.
+const FUNDING_WINDOW_MS = Number(process.env.FUNDING_WINDOW_MS || 3600000);  // 1h
+const REVEAL_BUFFER = Number(process.env.REVEAL_BUFFER_BLOCKS || 6);         // QBT blocks (beyond confsTarget) the timelock must stay ahead before the buyer may reveal
 const TO_MULT = Number(process.env.HTLC_TO_MULT || 2);                      // claim window ≈ maturity × this + base
 const TO_BASE_SECS = Number(process.env.HTLC_TO_BASE_SECS || 10800);        // toLeg (QBT-seller refund) base window: 3h — funding/detection slack, plus a ~3 BTC flat work-cost floor against a rented-hashrate sprint compressing the height-based CLTV (censor the buyer's claim, refund early, take the BTC with the mempool-leaked preimage). Large swaps widen further via the confs term.
 const FROM_GAP_SECS = Number(process.env.HTLC_FROM_GAP_SECS || 7200);       // extra BTC time the buyer's leg outlasts the seller's: 2h — absorbs long Bitcoin inter-block gaps (P(no block in 2h) ≈ e^-12) so the seller's BTC claim can't be refunded out from under it
@@ -286,6 +296,7 @@ async function deriveHtlcs(s) {
     : { witnessScript: hex(script), spk: hex(p2wshSpk(script)), address: p2wshAddr(script, HRP.btc) };
   s.htlc = { [fromLeg]: pack(fromLeg, fromScript), [toLeg]: pack(toLeg, toScript) };
   s.state = "READY";
+  s.readyAt ||= Date.now();   // starts the funding-window countdown
 }
 
 // Watcher tick: detect funding on both legs, gate the initiator's claim on reorg-safe confs, surface
@@ -321,6 +332,13 @@ export async function poll(s) {
   // Confirmation depth of each deposit (0 while still in the mempool).
   if (from) from.confs = from.height != null ? H[fromLeg] - from.height + 1 : 0;
   if (to) to.confs = to.height != null ? H[toLeg] - to.height + 1 : 0;
+  // Sequenced funding: the initiator's BTC deposit must be buried & irreversible before the participant
+  // funds QBT. Otherwise the initiator could fund BTC low-fee, let QBT confirm, RBF-cancel the BTC, then
+  // claim the QBT (revealing the preimage) — leaving the participant's BTC claim spending a UTXO that was
+  // replaced away. Once BTC is buried it can't be RBF'd, so the claim always has a live UTXO. Record when
+  // that clearance first held: it starts the participant's own funding countdown.
+  const fromBuried = !!from && !from.unconfirmed && (from.confs || 0) >= s.fromConfsTarget.confs;
+  if (fromBuried) s.fromConfirmedAt ||= Date.now();
   // recompute the pre-claim state from ground truth (broadcast() owns CLAIMED/COMPLETE/REFUNDED)
   if (!["CLAIMED", "CANCELED", ...TERMINAL].includes(s.state)) {
     let st = "READY";
@@ -329,9 +347,16 @@ export async function poll(s) {
       // Reveal the preimage (become CLAIMABLE) only when BOTH deposits are buried to their reorg-safe
       // depth: toLeg protects the buyer against a reorg of the coin they claim; fromLeg protects the
       // seller, whose subsequent claim must spend a funding tx the buyer can no longer RBF/double-spend.
-      const fromReady = !!from && !from.unconfirmed && from.confs >= s.fromConfsTarget.confs;
+      const fromReady = fromBuried;
       const toReady = to.confs >= s.confsTarget.confs;
-      st = from ? (fromReady && toReady ? "CLAIMABLE" : "MATURING") : "TO_FUNDED";
+      // AND the QBT timelock must still be far enough ahead for the buyer's claim to bury reorg-safe
+      // BEFORE the seller's refund unlocks. A slow-confirming (low-fee) deposit can push maturity right up
+      // against the timelock; if so we must NOT reveal — the seller could then race a refund and grab both.
+      // Hold at MATURING instead, which routes both sides to a safe refund. This gate is on the STATE, so
+      // the watchtower (which only reveals in CLAIMABLE) is bound by it too and can't exacerbate the race.
+      const inTime = (s.locktimes[toLeg] - H[toLeg]) >= s.confsTarget.confs + REVEAL_BUFFER;
+      s.tooLate = !!(from && fromReady && toReady && !inTime);   // matured but no longer safe to complete → will refund
+      st = from ? (fromReady && toReady && inTime ? "CLAIMABLE" : "MATURING") : "TO_FUNDED";
     }
     s.state = st;
   }
@@ -367,13 +392,21 @@ export async function broadcast(s, leg, kind, txHex) {
   //   · fromLeg (BTC) — so the seller's subsequent claim spends a funding tx the buyer can no longer RBF;
   //   · toLeg  (QBT) — so once the secret is public the seller can't RBF-cancel their own (still-0-conf)
   //     deposit out from under the buyer's claim, keeping the QBT AND taking the BTC.
-  // A confirmed tx can't be RBF'd, so requiring both mined closes the window in either confirmation
-  // order. Qbit has no public relay, so this coordinator check is the effective barrier. The seller's
-  // fromLeg claim (secret already public) and either refund are never blocked.
+  // A confirmed tx can't be RBF'd, so requiring both mined closes the window in either confirmation order.
+  // Treat every chain as an OPEN network: assume a determined party can relay a signed tx without us, so
+  // this coordinator check is NOT a hard barrier — it's the honest-client policy plus a backstop for naive
+  // users. The actual guarantees come from the protocol itself: sequenced funding (the seller only funds
+  // once the buyer's BTC is irreversibly buried, see poll()) and each party's client waiting for the coin
+  // it claims to bury before revealing — so a party who bypasses this check only ever risks its own funds.
+  // The seller's fromLeg claim (secret already public) and either refund are never blocked.
   if (kind === "claim" && leg === s.roles.toLeg) {
     const buried = (f, tgt, l) => f && !f.unconfirmed && (f.confs || 0) >= (tgt?.confs || MIN_CONFS[l]);
     if (!buried(s.funding[s.roles.fromLeg], s.fromConfsTarget, s.roles.fromLeg) || !buried(s.funding[leg], s.confsTarget, leg))
       throw new Error("both deposits must confirm to a safe depth before the swap can settle — try again shortly");
+    // And refuse to reveal if the QBT timelock is now too close for this claim to bury before the seller's
+    // refund unlocks (a slow deposit ran down the window) — revealing here would let the seller take both.
+    if ((s.locktimes[leg] - (s.heights?.[leg] || 0)) < s.confsTarget.confs + REVEAL_BUFFER)
+      throw new Error("too close to the timelock to reveal safely — this swap will refund instead");
   }
   const chain = chainOf(leg);
   const acc = await chain.testAccept(txHex);
@@ -420,24 +453,28 @@ async function wtBroadcast(s, role, leg, kind, tier) {
   const txHex = (kind === "claim" && b.needsPreimage) ? splicePreimage(raw, s.preimage) : raw;
   return wtSend(s, role, leg, kind, txHex, tier);
 }
-// Called every watcher tick. The watchtower is a FALLBACK: it only acts for a party that's actually
-// OFFLINE (presence, with its ~15s grace) — an online client finishes its own swap, so the watchtower
-// never races it. It drives the swap to completion (or refund) from that party's pre-signed bundle.
+// Called every watcher tick. The watchtower broadcasts each party's pre-signed tx AS SOON AS the chain
+// condition for it is met — it does NOT care whether the party is online. A claim/refund sends the
+// party's OWN coins to the party's OWN address, so if the client is also live and broadcasts, the two
+// are the same spend: one confirms, the other is a harmless double-spend the network drops. Presence is
+// a UI signal only; making the safety net depend on it (as it once did) let a stale "online" flag —
+// e.g. an SSE socket that lingers at the Cloudflare origin after the tab closed — freeze the swap. The
+// `s.wt[...]` guards keep the watchtower from re-sending its own broadcast; `unspent` stops once anyone's
+// spend lands. It drives the swap to completion (or refund) from each party's bundle regardless.
 export async function driveWatchtower(s) {
   if (!s.roles || !s.htlc || ["CREATED", "CANCELED", ...TERMINAL].includes(s.state)) return;
   const { fromLeg, toLeg } = s.roles, H = s.heights || {};
   const unspent = (leg) => s.funding[leg] && !s.funding[leg].spent;
-  const away = (role) => !isOnline(s, role);   // only step in for a party that has left
 
-  // a) offline initiator's claim of toLeg once matured -> reveals the preimage on-chain
-  if (s.state === "CLAIMABLE" && away("alice") && s.finish.alice?.claim && unspent(toLeg) && !s.wt["alice:claim"]) await wtBroadcast(s, "alice", toLeg, "claim", await pickTier(toLeg, s.finish.alice.claim.tiers));
-  // b) offline participant's claim of fromLeg once the preimage is public (spliced in)
-  if (s.preimage && away("bob") && s.finish.bob?.claim && unspent(fromLeg) && !s.wt["bob:claim"]) await wtBroadcast(s, "bob", fromLeg, "claim", await pickTier(fromLeg, s.finish.bob.claim.tiers));
+  // a) initiator's claim of toLeg once matured (CLAIMABLE) -> reveals the preimage on-chain
+  if (s.state === "CLAIMABLE" && s.finish.alice?.claim && unspent(toLeg) && !s.wt["alice:claim"]) await wtBroadcast(s, "alice", toLeg, "claim", await pickTier(toLeg, s.finish.alice.claim.tiers));
+  // b) participant's claim of fromLeg once the preimage is public (spliced in)
+  if (s.preimage && s.finish.bob?.claim && unspent(fromLeg) && !s.wt["bob:claim"]) await wtBroadcast(s, "bob", fromLeg, "claim", await pickTier(fromLeg, s.finish.bob.claim.tiers));
   // c) abort refunds after each leg's timelock (only while no preimage — else the claim path applies),
   //    sized to the live fastest fee from the pre-signed refund ladder.
   if (!s.preimage && s.locktimes) {
-    if (away("alice") && s.finish.alice?.refund && unspent(fromLeg) && (H[fromLeg] || 0) >= s.locktimes[fromLeg] && !s.wt["alice:refund"]) await wtBroadcast(s, "alice", fromLeg, "refund", await pickTier(fromLeg, s.finish.alice.refund.tiers));
-    if (away("bob") && s.finish.bob?.refund && unspent(toLeg) && (H[toLeg] || 0) >= s.locktimes[toLeg] && !s.wt["bob:refund"]) await wtBroadcast(s, "bob", toLeg, "refund", await pickTier(toLeg, s.finish.bob.refund.tiers));
+    if (s.finish.alice?.refund && unspent(fromLeg) && (H[fromLeg] || 0) >= s.locktimes[fromLeg] && !s.wt["alice:refund"]) await wtBroadcast(s, "alice", fromLeg, "refund", await pickTier(fromLeg, s.finish.alice.refund.tiers));
+    if (s.finish.bob?.refund && unspent(toLeg) && (H[toLeg] || 0) >= s.locktimes[toLeg] && !s.wt["bob:refund"]) await wtBroadcast(s, "bob", toLeg, "refund", await pickTier(toLeg, s.finish.bob.refund.tiers));
   }
   // d) Fee management for the watchtower's own claims. We (re)broadcast ONLY when the funding is
   //    genuinely unspent ON-CHAIN (mempool included) — i.e. no claim is in flight or mined, whether ours
@@ -449,7 +486,7 @@ export async function driveWatchtower(s) {
   //    re-sends the same tier, a fee spike steps it up. testAccept no-ops it if nothing needs changing.
   for (const [role, kind, leg] of [["alice", "claim", toLeg], ["bob", "claim", fromLeg], ["alice", "refund", fromLeg], ["bob", "refund", toLeg]]) {
     const rec = s.wt[`${role}:${kind}`], b = s.finish[role]?.[kind], f = s.funding[leg];
-    if (!rec || !b || !away(role) || !f) continue;
+    if (!rec || !b || !f) continue;
     if (kind === "refund" && s.preimage) continue;                   // abort refunds are moot once the secret is out
     if (!(await chainOf(leg).isUnspent(f.txid, f.vout))) continue;   // a spend (ours or theirs) is in the mempool/chain → don't interfere
     const tier = Math.max(rec.tier, await pickTier(leg, b.tiers));   // live fastest-fee tier, never downgraded
@@ -461,10 +498,24 @@ export async function driveWatchtower(s) {
 
 // The view a party is allowed to see (both legs' public data; preimage only once on-chain).
 export function view(s, role) {
+  // Sequenced funding: the participant (bob) funds the toLeg (QBT) leg and may only do so once the
+  // initiator's fromLeg (BTC) deposit is buried & irreversible; the initiator (alice) funds first,
+  // unconditionally. `cleared` gates the participant's deposit prompt; the countdown starts from the
+  // moment they're cleared, not from join, so a slow BTC confirmation doesn't eat their funding window.
+  const toFunder = role === "bob";
+  const fromF = s.funding[s.roles?.fromLeg];
+  const fundGate = toFunder
+    ? { cleared: !!s.fromConfirmedAt, funded: !!fromF, unconfirmed: !!(fromF && fromF.unconfirmed), confs: fromF?.confs || 0, need: s.fromConfsTarget?.confs || 1 }
+    : { cleared: true };
+  const fundStart = toFunder ? s.fromConfirmedAt : s.readyAt;
   return {
     id: s.id, role, state: s.state, terms: s.terms, direction: s.terms.direction, roles: s.roles,
     H: s.H, locktimes: s.locktimes, htlc: s.htlc, funding: s.funding, heights: s.heights,
-    confsTarget: s.confsTarget, fromConfsTarget: s.fromConfsTarget, fee: s.fee || null, refund: s.refund, feerates: { btc: cachedBtcFeerates(), qbit: cachedQbitFeerates() },
+    confsTarget: s.confsTarget, fromConfsTarget: s.fromConfsTarget, fee: s.fee || null,
+    fundGate,
+    fundBy: fundStart ? fundStart + FUNDING_WINDOW_MS : null, now: Date.now(),   // funding deadline + server clock (countdown is server-anchored)
+    tooLate: !!s.tooLate,   // both matured but too close to the timelock to safely complete → will refund
+    refund: s.refund, feerates: { btc: cachedBtcFeerates(), qbit: cachedQbitFeerates() },
     counterparty: s.party[role === "alice" ? "bob" : "alice"], self: s.party[role],
     counterpartyOnline: isOnline(s, role === "alice" ? "bob" : "alice"), selfOnline: isOnline(s, role),
     safetyNet: { self: !!s.finish?.[role], counterparty: !!s.finish?.[role === "alice" ? "bob" : "alice"] },

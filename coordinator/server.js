@@ -92,6 +92,7 @@ async function handle(req, res) {
       markSeen(s.id, role);   // any authenticated hit = this party is online (covers browser + bot)
 
       if (method === "GET" && !parts[2]) return json(res, 200, view(s, role));
+      if (method === "GET" && parts[2] === "beat") return json(res, 200, { ok: true });   // presence heartbeat — markSeen already ran above (GET, so rate-limiter-exempt)
       if (method === "GET" && parts[2] === "events") return sse(req, res, s, role);
       if (method === "POST" && parts[2] === "party") { await submitParty(s, role, await readBody(req)); return json(res, 200, view(s, role)); }
       if (method === "POST" && parts[2] === "broadcast") {

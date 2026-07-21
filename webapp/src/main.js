@@ -650,6 +650,10 @@ function startLive() {
   rerender = () => { if (flow.client?.view) renderLive(liveCard, flow.client.view); };
   flow.client.onUpdate = (v) => renderLive(liveCard, v);
   flow.client.start();
+  // Re-render on a slow tick so the funding countdown advances even when the coordinator sends no update
+  // (SSE only pushes on changes). Skipped while the verification screen is up so it isn't clobbered.
+  clearInterval(flow._tick);
+  flow._tick = setInterval(() => { if (!flow._verifying && flow.client?.view) renderLive(liveCard, flow.client.view); }, 15000);
 }
 const STATE_CLASS = { COMPLETE: "good", REFUNDED: "warn", CLAIMABLE: "info", CLAIMED: "info", ABORTED: "bad", CANCELED: "warn" };
 // Public block explorers for the tx links in the timeline.
@@ -787,7 +791,19 @@ function renderLive(card, v) {
       h("a", { href: "#", style: "color:var(--mut)", onclick: (e) => { e.preventDefault(); stepShare(); } }, t("back"))));
   }
 
-  if (!terminal && addr && !funded && !flow.verified) {
+  // Funding window: countdown anchored to the SERVER clock (v.now) so it's immune to a wrong client clock.
+  if (v.now) flow._clockOffset = v.now - Date.now();
+  const msLeft = (!funded && v.fundBy) ? v.fundBy - (Date.now() + (flow._clockOffset || 0)) : null;
+  const expired = msLeft != null && msLeft <= 0;
+
+  if (!terminal && addr && expired) {
+    // The funding window elapsed — the timelocks were fixed at setup, so funding this late is no longer
+    // safe. Refuse to show the deposit address; send them to make a fresh swap.
+    card.append(h("div", { class: "fund" },
+      h("div", { style: "font-size:16px;font-weight:600;color:var(--bad)" }, t("fundExpiredTitle")),
+      h("p", { class: "note", style: "margin-top:6px" }, t("fundExpiredBody")),
+      h("div", { class: "btns", style: "margin-top:14px" }, h("button", { class: "primary", style: "width:100%", onclick: () => goHome() }, t("verifyLeave")))));
+  } else if (!terminal && addr && !funded && !flow.verified) {
     // Gate the deposit address behind an explicit address check. A counterparty could hand you a link
     // where the receive/refund addresses aren't yours; you must confirm they're YOURS before any coins
     // move — so a naive user can't be talked into "just send to this address."
@@ -795,14 +811,36 @@ function renderLive(card, v) {
       h("div", { style: "font-size:16px;font-weight:600" }, t("verifyGateTitle")),
       h("p", { class: "note", style: "margin-top:6px" }, t("verifyGateSub")),
       h("div", { class: "btns", style: "margin-top:14px" }, h("button", { class: "primary", style: "width:100%", onclick: () => startVerify(v) }, t("beginVerify")))));
+  } else if (!terminal && addr && !funded && v.fundGate && !v.fundGate.cleared) {
+    // Sequenced funding: the QBT seller must not deposit until the buyer's BTC deposit is buried &
+    // irreversible — otherwise the buyer could RBF-cancel the BTC after the QBT confirms, claim the QBT
+    // (revealing the preimage), and leave this deposit's counterparty-claim spending a replaced-away UTXO.
+    // Hold the deposit address; show progress toward clearance. (The buyer/alice is always cleared.)
+    const g = v.fundGate;
+    const status = !g.funded ? t("seqWaitNoBtc") : g.unconfirmed ? t("seqWaitMempool") : t("seqWaitConfs", { confs: g.confs, need: g.need });
+    card.append(h("div", { class: "fund" },
+      h("div", { style: "font-size:16px;font-weight:600" }, t("seqGateTitle")),
+      h("p", { class: "note", style: "margin-top:6px" }, t("seqGateBody")),
+      h("p", { class: "note", style: "margin-top:10px;font-weight:600;color:var(--warn)" }, status)));
   } else if (!terminal && addr) {
+    const feerate = Math.max(1, Math.round(v.feerates?.[fundLeg]?.fastestFee || 0));
+    const minsLeft = msLeft != null ? Math.max(0, Math.ceil(msLeft / 60000)) : null;
     card.append(h("div", { class: "fund" },
       h("div", { class: "muted" }, funded ? t(funded.unconfirmed ? "coinPendingCheck" : "coinLockedCheck", { coin: send }) : t("sendExactly", { coin: send })),
       h("div", { class: "amt" }, `${sats(sendSats(v))} ${send}`),
       feeBreakdown(v),
+      // Deposit fee-rate guidance: the swap can't progress until this deposit confirms, so nudge the
+      // sender to at least mempool's High-priority rate (BTC only — QBT is uncongested).
+      (!funded && send === "BTC" && feerate > 1) ? h("p", { class: "note", style: "margin-top:6px" }, t("feeRateHint", { rate: feerate })) : null,
+      // Staggered-funding expectation for the BTC buyer (who funds first): the seller deposits only after this confirms.
+      send === "BTC" ? h("p", { class: "note", style: "margin-top:6px;color:var(--mut)" }, t(funded ? "seqBuyerFundedNote" : "seqBuyerNote")) : null,
       funded ? null : h("div", { class: "mono", style: "margin-top:6px" }, addr),
-      funded ? null : h("div", { class: "btns" }, copyButton("copyAddress", "copiedCheck", () => addr))));
+      funded ? null : h("div", { class: "btns" }, copyButton("copyAddress", "copiedCheck", () => addr)),
+      (!funded && minsLeft != null) ? h("p", { class: "note", style: `margin-top:10px;color:${minsLeft <= 10 ? "var(--warn)" : "var(--mut)"}` }, t("fundCountdown", { mins: minsLeft })) : null));
   }
+
+  // A deposit confirmed so slowly that it's now unsafe to complete — the swap will refund on its own.
+  if (!terminal && v.tooLate) card.append(h("p", { class: "note", style: "color:var(--warn);font-weight:600;margin-top:10px" }, t("tooLateRefund")));
 
   // Persistent progress timeline (each step + its explorer tx link stays on the page, incl. after
   // completion). Its per-step "in mempool" tag surfaces 0-conf deposit detection on both legs.
@@ -835,6 +873,7 @@ function verifyAddr(v, which) {
   return { coin, addr };
 }
 function startVerify(v) {
+  flow._verifying = true;
   if (flow.client) flow.client.onUpdate = () => {};   // hold live re-renders during the steps
   renderVerify(v, "receive");
 }
@@ -852,12 +891,12 @@ function renderVerify(v, which) {
       h("button", { style: "flex:1", onclick: () => verifyFail() }, t("verifyNo"))));
 }
 function verifyDone(v) {
-  flow.verified = true;
+  flow.verified = true; flow._verifying = false;
   if (flow.client) flow.client.onUpdate = (vv) => renderLive(liveCard, vv);   // resume live updates
   renderLive(liveCard, flow.client?.view || v);
 }
 function verifyFail() {
-  liveGuard = { risky: false };
+  flow._verifying = false; liveGuard = { risky: false };
   while (liveCard.firstChild) liveCard.removeChild(liveCard.firstChild);
   liveCard.append(
     h("h2", { style: "color:var(--bad)" }, t("verifyFailTitle")),

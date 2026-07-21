@@ -64,11 +64,17 @@ async function runDirection(browser, choiceText, label) {
   }
   console.log("  both verified their addresses ✓");
 
-  await A.waitForSelector(".fund .mono", { timeout: 20000 });
-  await B.waitForSelector(".fund .mono", { timeout: 20000 });
-  await fundAddr((await depositAddr(A)).trim());          // user sends — here the node wallets stand in
-  await fundAddr((await depositAddr(B)).trim());
-  console.log("  both deposits sent (manual funding) ✓");
+  // Sequenced funding: the BTC (buyer) deposit address shows immediately; the QBT (seller) address is
+  // withheld until the BTC deposit confirms. So fund BTC first, then the QBT side once it unlocks.
+  // Buy QBT: creator(A)=buyer funds BTC, joiner(B)=seller funds QBT. Sell QBT: the reverse.
+  const btcPage = choiceText === "Buy QBT" ? A : B;
+  const qbtPage = choiceText === "Buy QBT" ? B : A;
+  await btcPage.waitForSelector(".fund .mono", { timeout: 20000 });
+  await fundAddr((await depositAddr(btcPage)).trim());     // user sends — here the node wallets stand in
+  console.log("  BTC deposit sent; waiting for it to confirm before QBT address unlocks…");
+  await qbtPage.waitForSelector(".fund .mono", { timeout: 90000 });   // unlocks only after BTC buries
+  await fundAddr((await depositAddr(qbtPage)).trim());
+  console.log("  both deposits sent (BTC first, QBT after confirmation) ✓");
   let a = "", bb = ""; const end = Date.now() + 150000;
   while (Date.now() < end) { a = await badge(A); bb = await badge(B); if (a === "COMPLETE" && bb === "COMPLETE") break; await sleep(3000); }
   console.log(`  creator=${a} participant=${bb}`);

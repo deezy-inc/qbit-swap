@@ -23,8 +23,10 @@ export class SwapClient {
     this.onUpdate = onUpdate;
     this.feeSats = feeSats;
     this.acted = new Set();
-    // Direct-broadcast fallback for the BTC leg (see #send): public endpoints keyed by network. Qbit
-    // has no public node, so only the coordinator can relay QBT. Regtest/unknown → no fallback.
+    // Direct-broadcast fallback for the BTC leg (see #send): public HTTP endpoints keyed by network. We
+    // ship no equivalent browser-reachable QBT broadcast endpoint, so from the browser the coordinator is
+    // our QBT relay path (a node operator can of course relay QBT out-of-band — we never rely on it being
+    // hard to relay; swap safety comes from the protocol, not from gating relay). Regtest/unknown → none.
     this.btcBroadcast = BTC_BROADCAST[btcHrp] || [];
   }
 
@@ -120,8 +122,12 @@ export class SwapClient {
     const url = `${this.base}/swaps/${this.id}/events?token=${this.token}`;
     if (typeof EventSource !== "undefined") { this.es = new EventSource(url); this.es.onmessage = (e) => this.#onView(JSON.parse(e.data)); this.es.onerror = () => {}; }
     else this.timer = setInterval(async () => { try { this.#onView(await this.#api(`/swaps/${this.id}`, { token: this.token })); } catch {} }, 2000);
+    // Presence heartbeat: an SSE connection alone no longer counts as "online" server-side (a tab closed
+    // behind the Cloudflare tunnel can leave the socket lingering), so keep our last-seen fresh with a
+    // tiny periodic hit. Cleared in stop() — and when the tab closes, the beats simply stop.
+    this.beat = setInterval(() => { this.#api(`/swaps/${this.id}/beat`, { token: this.token }).catch(() => {}); }, 6000);
   }
-  stop() { this.es?.close(); clearInterval(this.timer); }
+  stop() { this.es?.close(); clearInterval(this.timer); clearInterval(this.beat); }
   // Cancel an unfunded swap (either party). The coordinator rejects it once a deposit exists.
   cancel() { return this.#api(`/swaps/${this.id}/cancel`, { token: this.token, method: "POST" }); }
 
@@ -181,7 +187,8 @@ export class SwapClient {
   // Broadcast a signed claim/refund. Primary path is the coordinator (it relays to both chains' nodes
   // and updates its view). If the coordinator is unreachable, the BTC leg can still be pushed to the
   // network directly via public broadcast APIs — so a backend outage never traps your Bitcoin
-  // claim/refund while this tab is open. (QBT has no public node; only the coordinator can relay it.)
+  // claim/refund while this tab is open. We ship no browser-reachable QBT broadcast endpoint, so from
+  // this tab QBT goes via the coordinator (this is a browser-reachability gap, not a safety assumption).
   async #send(leg, kind, tx) {
     const key = `${leg}:${kind}`, txHex = hex(tx);
     this.acted.add(key);   // guard against a duplicate fire on the next tick while this send is in flight
@@ -224,10 +231,14 @@ export class SwapClient {
       claim: { leg: claim, needsPreimage: this.role !== "alice", tiers: await ladderOf(claim, "claim", claimPreimage, feeVbytes(v, claim, "claim")) },
       refund: { leg: refund, tiers: await ladderOf(refund, "refund", new Uint8Array(0), 0) },   // no coordinator-fee output on a refund
     };
-    await this.#api(`/swaps/${this.id}/finish`, { token: this.token, method: "POST", body: bundle });
-    // Keep our own copy of the pre-signed recovery ladder so it can be written into the backup file —
-    // the file alone (keys + these txs) is enough to recover even if the coordinator is gone.
+    // Keep our own copy of the pre-signed recovery ladder BEFORE the POST — the file alone (keys + these
+    // txs) is enough to recover even if the coordinator is gone, AND the coordinator emits the "armed"
+    // view update the instant it receives the bundle (over SSE, before this POST's own response
+    // resolves); that update re-renders, so recovery must already be set or the "download recovery
+    // backup" button is missed until the next update. Safe if the POST fails: `armed` stays false, so the
+    // button stays hidden until a successful retry.
     this.recovery = bundle;
+    await this.#api(`/swaps/${this.id}/finish`, { token: this.token, method: "POST", body: bundle });
     this.armedKey = key;
     this.armed = true;   // the coordinator now reflects safetyNet.self=true in the view
   }
@@ -283,8 +294,9 @@ export class SwapClient {
 // economy→extreme; Qbit is uncongested so a low pair suffices.
 const DUST = 546;
 // Public BTC broadcast endpoints for the coordinator-down fallback (#send), keyed by the BTC hrp
-// (network). They accept a raw tx hex as the POST body and return the txid. Qbit has no equivalent
-// public node, so there is no QBT fallback. Regtest ("bcrt") has no public endpoint → empty (disabled).
+// (network). They accept a raw tx hex as the POST body and return the txid. We ship no equivalent
+// browser-reachable QBT endpoint, so there's no in-tab QBT fallback (a node operator can still relay QBT
+// out-of-band). Regtest ("bcrt") has no public endpoint → empty (disabled).
 export const BTC_BROADCAST = {
   bc: ["https://mempool.space/api/tx", "https://blockstream.info/api/tx"],
   tb: ["https://mempool.space/testnet4/api/tx", "https://blockstream.info/testnet/api/tx"],
