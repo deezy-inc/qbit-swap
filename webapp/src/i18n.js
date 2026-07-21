@@ -218,6 +218,8 @@ const en = {
   leaveWarn: "Your safety net isn't set up yet — if you leave now you'll need to come back to finish or get a refund.",
   underfundWarn: "⚠ A deposit came in below the agreed amount, so the swap is paused. The underfunded deposit can be refunded after its timelock.",
   viewDeposit: "view deposit ↗",
+  shortRefundWait: "Your {coin} isn't lost — it will be refunded to your refund address automatically once its timelock passes ({eta}). Keep this tab open, or return with your backup file.",
+  shortRefunding: "The timelock has passed — refunding your {coin} to your refund address now…",
   securityErr: "⚠ Security check failed — the swap's addresses don't match your keys. Do NOT send any funds. Refresh the page or start over.",
 };
 const zh = {
@@ -430,6 +432,8 @@ const zh = {
   leaveWarn: "您的安全网尚未设置——如果现在离开，您需要回来才能完成或退款。",
   underfundWarn: "⚠ 有一笔存款低于约定金额，兑换已暂停。金额不足的存款可在其时间锁到期后退款。",
   viewDeposit: "查看存款 ↗",
+  shortRefundWait: "您的 {coin} 不会丢失——在其时间锁到期后（{eta}），系统将自动退款至您的退款地址。请保持此标签页开启，或稍后携带备份文件返回。",
+  shortRefunding: "时间锁已到期——正在将您的 {coin} 退款至您的退款地址……",
   securityErr: "⚠ 安全校验失败——兑换地址与您的密钥不匹配。请勿发送任何资金。请刷新页面或重新开始。",
 };
 const DICTS = { en, zh };

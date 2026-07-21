@@ -235,7 +235,7 @@ export const allSwaps = () => [...swaps.values()];
 // so the coordinator isn't left watching them. The record is kept (state CANCELED, sticky): the HTLC
 // addresses stay valid, so if someone funds one anyway they can still refund after the timelock.
 export function cancelSwap(s, role) {
-  if (s.funding?.btc || s.funding?.qbit) throw new Error("a deposit already exists — cancel is only for unfunded swaps");
+  if (s.funding?.btc || s.funding?.qbit || s.shortFunded) throw new Error("a deposit already exists — cancel is only for unfunded swaps; an underfunded deposit is refundable after its timelock");
   if (s.state === "CANCELED" || TERMINAL.includes(s.state)) throw new Error("swap already finished");
   s.canceled = { by: role, at: Date.now() };
   s.state = "CANCELED";
@@ -320,13 +320,15 @@ export async function poll(s) {
     if (!cur || cur.unconfirmed) {
       const o = await chainOf(leg).findOutput(s.htlc[leg].spk);
       if (o && o.amountSats >= need[leg]) s.funding[leg] = { txid: o.txid, vout: o.vout, amountSats: o.amountSats, height: o.height, unconfirmed: o.height == null, spent: false };
-      else if (o) s.shortFunded = { ...(s.shortFunded || {}), [leg]: { got: o.amountSats, need: need[leg], txid: o.txid } };   // txid so the app can link the underfunded deposit (refundable after its timelock)
+      else if (o) s.shortFunded = { ...(s.shortFunded || {}), [leg]: { got: o.amountSats, need: need[leg], txid: o.txid, vout: o.vout, amountSats: o.amountSats, height: o.height, unconfirmed: o.height == null, spent: false } };   // full outpoint: an underfunded deposit is a real HTLC UTXO, refundable by its funder after the timelock
       else if (cur && cur.unconfirmed) s.funding[leg] = null;   // unconfirmed deposit dropped out of the mempool
     }
   }
   // Spent-detection only for CONFIRMED funding (a claim/refund spending it). An unconfirmed deposit is
   // managed by the re-poll above, not treated as "spent" when gettxout can't see it yet.
   for (const leg of ["btc", "qbit"]) if (s.funding[leg] && !s.funding[leg].unconfirmed && !s.funding[leg].spent && !(await chainOf(leg).isUnspent(s.funding[leg].txid, s.funding[leg].vout))) s.funding[leg].spent = true;
+  // Same spent-detection for an underfunded deposit, so its refund flips the swap to REFUNDED.
+  for (const leg of ["btc", "qbit"]) { const sf = s.shortFunded?.[leg]; if (sf && !sf.unconfirmed && !sf.spent && !(await chainOf(leg).isUnspent(sf.txid, sf.vout))) sf.spent = true; }
 
   const from = s.funding[fromLeg], to = s.funding[toLeg];
   // Confirmation depth of each deposit (0 while still in the mempool).
@@ -363,10 +365,13 @@ export async function poll(s) {
   if (s.preimage && to?.spent && from?.spent && !TERMINAL.includes(s.state)) { s.state = "COMPLETE"; s.settledAt = Date.now(); }
 
   // Refundability: initiator reclaims fromLeg after its (longer) timelock; participant reclaims toLeg
-  // after its (shorter) timelock — each while their own deposit is still unspent.
+  // after its (shorter) timelock — each while their own deposit is still unspent. An UNDERFUNDED deposit
+  // is a real HTLC UTXO too: fall back to it here so its funder can reclaim it (it never enters s.funding,
+  // so it can't progress the swap — this is purely the recovery path). `short` flags that case for the UI.
+  const fromR = from || s.shortFunded?.[fromLeg], toR = to || s.shortFunded?.[toLeg];
   s.refund = {
-    [fromLeg]: { party: "alice", at: s.locktimes[fromLeg], available: !!(from && !from.spent && H[fromLeg] >= s.locktimes[fromLeg]) },
-    [toLeg]: { party: "bob", at: s.locktimes[toLeg], available: !!(to && !to.spent && !s.preimage && H[toLeg] >= s.locktimes[toLeg]) },
+    [fromLeg]: { party: "alice", at: s.locktimes[fromLeg], available: !!(fromR && !fromR.spent && !fromR.unconfirmed && H[fromLeg] >= s.locktimes[fromLeg]), short: !from && !!s.shortFunded?.[fromLeg] },
+    [toLeg]: { party: "bob", at: s.locktimes[toLeg], available: !!(toR && !toR.spent && !s.preimage && !toR.unconfirmed && H[toLeg] >= s.locktimes[toLeg]), short: !to && !!s.shortFunded?.[toLeg] },
   };
   touch(s);
 }
@@ -383,7 +388,7 @@ async function applyEffects(s, leg, kind, txid) {
     if (s.funding[leg]) s.funding[leg].spent = true;
     if (leg === s.roles.fromLeg) { s.state = "COMPLETE"; s.settledAt = Date.now(); } else s.state = "CLAIMED";
   }
-  if (kind === "refund") { if (s.funding[leg]) s.funding[leg].spent = true; s.state = "REFUNDED"; s.settledAt = Date.now(); }
+  if (kind === "refund") { if (s.funding[leg]) s.funding[leg].spent = true; if (s.shortFunded?.[leg]) s.shortFunded[leg].spent = true; s.state = "REFUNDED"; s.settledAt = Date.now(); }
 }
 // A party submits a signed tx; the coordinator broadcasts it (keyless).
 export async function broadcast(s, leg, kind, txHex) {

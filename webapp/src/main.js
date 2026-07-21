@@ -937,19 +937,30 @@ function renderLive(card, v) {
       h("a", { href: "#", style: "color:var(--mut)", onclick: (e) => { e.preventDefault(); stepShare(); } }, t("back"))));
   }
   if (shorted) {
+    const legs = Object.keys(v.shortFunded);
     card.append(h("p", { class: "note", style: "color:var(--bad);font-weight:600;margin-top:12px" },
       t("underfundWarn"),
-      ...Object.keys(v.shortFunded).map((leg) => v.shortFunded[leg]?.txid
+      ...legs.map((leg) => v.shortFunded[leg]?.txid
         ? h("span", {}, " ", h("a", { href: EXPLORER[leg] + v.shortFunded[leg].txid, target: "_blank", rel: "noopener", style: "color:var(--accent);white-space:nowrap" }, t("viewDeposit"))) : null)));
+    // Recovery: the underfunded deposit is a real HTLC UTXO — refundable by its funder after the timelock,
+    // which the app does automatically. Reassure that the funds aren't lost and give a rough ETA.
+    const rl = legs.find((leg) => v.refund?.[leg]?.short), r = rl ? v.refund[rl] : null;
+    if (r) {
+      const coin = rl === "btc" ? "BTC" : "QBT";
+      const secs = Math.max(0, r.at - (v.heights?.[rl] || 0)) * (AVG_BLOCK[rl] || 600);
+      const eta = secs < 3600 ? `~${Math.round(secs / 60)} min` : `~${Math.round(secs / 3600 * 10) / 10} h`;
+      card.append(h("p", { class: "note", style: "margin-top:8px" }, r.available ? t("shortRefunding", { coin }) : t("shortRefundWait", { coin, eta })));
+    }
   }
   if (v.actionError) card.append(h("p", { class: "note", style: "color:var(--bad)" }, "⚠ " + v.actionError));
-  // Either party can cancel while NOTHING is confirmed-funded — clears stale swaps; the counterparty sees it.
-  // Once paused (underfunded), cancelling is the sensible next move, so show it as a real button.
-  if (!terminal && !v.funding?.btc && !v.funding?.qbit) {
-    const doCancel = async (e) => { e.preventDefault(); if (!confirm(t("cancelConfirm"))) return; try { await flow.client.cancel(); } catch (err) { alert(err.message); } };
-    card.append(shorted
-      ? h("div", { class: "btns", style: "margin-top:16px" }, h("button", { class: "btn-ghost", style: "width:100%", onclick: doCancel }, t("cancelSwap")))
-      : h("div", { style: "margin-top:16px;text-align:center" }, h("a", { href: "#", style: "color:var(--mut);font-size:13px", onclick: doCancel }, t("cancelSwap"))));
+  // Cancel only when NOTHING is on-chain (unfunded) — it clears a stale swap and the counterparty sees it.
+  // An underfunded deposit can't be cancelled away (real funds are locked); it's refunded automatically above.
+  if (!terminal && !v.funding?.btc && !v.funding?.qbit && !shorted) {
+    card.append(h("div", { style: "margin-top:16px;text-align:center" },
+      h("a", { href: "#", style: "color:var(--mut);font-size:13px", onclick: async (e) => {
+        e.preventDefault(); if (!confirm(t("cancelConfirm"))) return;
+        try { await flow.client.cancel(); } catch (err) { alert(err.message); }
+      } }, t("cancelSwap"))));
   }
   // Keep the finished swap in the vault (marked done) rather than purging it, so reopening its link or
   // permalink resumes straight to this final status instead of the join flow. It's filtered out of the

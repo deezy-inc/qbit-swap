@@ -258,7 +258,7 @@ export class SwapClient {
   // Live claim/refund the party signs itself: size the BTC fee at mempool's High-priority tier
   // (v.feerates.fastestFee) so it confirms promptly — the pre-signed fee ladder is only the fallback
   // the watchtower uses when this party is OFFLINE. Never let the fee eat the output below dust.
-  #liveFee(v, leg, kind) { const amt = v.funding?.[leg]?.amountSats || 0; return Math.min(dynFee(leg, kind, v.feerates, feeVbytes(v, leg, kind)), amt - DUST); }
+  #liveFee(v, leg, kind) { const amt = (v.funding?.[leg] || v.shortFunded?.[leg])?.amountSats || 0; return Math.min(dynFee(leg, kind, v.feerates, feeVbytes(v, leg, kind)), amt - DUST); }
   async #claim(v, leg, preimage) { return this.#send(leg, "claim", await this.#build(v, leg, "claim", preimage, this.#liveFee(v, leg, "claim"))); }
   async #refund(v, leg) { return this.#send(leg, "refund", await this.#build(v, leg, "refund", new Uint8Array(0), this.#liveFee(v, leg, "refund"))); }
 
@@ -274,7 +274,7 @@ export class SwapClient {
   }
 
   async #buildQbit(v, kind, preimage, feeSats) {
-    const f = v.funding.qbit, leaf = bin(v.htlc.qbit.leaf), spk = bin(v.htlc.qbit.spk);
+    const f = v.funding.qbit || v.shortFunded?.qbit, leaf = bin(v.htlc.qbit.leaf), spk = bin(v.htlc.qbit.spk);   // shortFunded → refund an underfunded deposit
     const destSpk = addressToScriptPubKey(this.qbitDest), prevoutLE = bin(f.txid).reverse(), outVal = f.amountSats - feeSats;
     const refund = kind === "refund", lock = refund ? v.locktimes.qbit : 0, seq = refund ? 0xfffffffe : 0xffffffff;
     const sh = p2mrSighash({ version: 2, locktime: lock, vin: [{ txidLE: prevoutLE, vout: f.vout, sequence: seq }], spentOutputs: [{ amount: f.amountSats, spk }], vout: [{ value: outVal, spk: destSpk }], inputIndex: 0, leafScript: leaf });
@@ -284,7 +284,7 @@ export class SwapClient {
     return serializeTx({ version: 2, vin: [[prevoutLE, f.vout, new Uint8Array(0), seq]], vout: [[BigInt(outVal), destSpk]], wit: [wit], locktime: lock });
   }
   async #buildBtc(v, kind, preimage, feeSats) {
-    const f = v.funding.btc, ws = bin(v.htlc.btc.witnessScript), destSpk = addressToScriptPubKey(this.btcDest);
+    const f = v.funding.btc || v.shortFunded?.btc, ws = bin(v.htlc.btc.witnessScript), destSpk = addressToScriptPubKey(this.btcDest);   // shortFunded → refund an underfunded deposit
     const branch = kind === "refund" ? "refund" : "claim";
     // Coordinator fee: on a successful BTC claim, add a second output paying the coordinator's fee
     // address. The buyer funded it on top of the swap amount, so the seller still nets the full swap
