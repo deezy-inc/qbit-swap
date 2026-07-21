@@ -156,7 +156,7 @@ async function faucetNewAddress(leg) { const r = await fetch(`${FAUCET}/newaddre
 async function prefill(input, coin) { if (!FAUCET) return; try { input.value = await faucetNewAddress(coinLeg(coin)); } catch {} }
 
 // ── flow state ────────────────────────────────────────────────────────────────
-const flow = { mode: null, role: null, direction: null, coordinator: DEFAULT_COORD, btcSats: 0, qbtSats: 0, receiveAddr: "", refundAddr: "", client: null, inviteLink: null, fee: null };
+const flow = { mode: null, role: null, direction: null, coordinator: DEFAULT_COORD, btcSats: 0, qbtSats: 0, receiveAddr: "", refundAddr: "", client: null, inviteLink: null, fee: null, verified: false };
 const coinSats = (coin) => (coin === "BTC" ? flow.btcSats : flow.qbtSats);
 // What THIS party sends/receives, from their role: alice (QBT buyer) sends BTC & receives QBT; bob
 // (QBT seller) sends QBT & receives BTC. Independent of who created the swap.
@@ -787,7 +787,15 @@ function renderLive(card, v) {
       h("a", { href: "#", style: "color:var(--mut)", onclick: (e) => { e.preventDefault(); stepShare(); } }, t("back"))));
   }
 
-  if (!terminal && addr) {
+  if (!terminal && addr && !funded && !flow.verified) {
+    // Gate the deposit address behind an explicit address check. A counterparty could hand you a link
+    // where the receive/refund addresses aren't yours; you must confirm they're YOURS before any coins
+    // move — so a naive user can't be talked into "just send to this address."
+    card.append(h("div", { class: "fund" },
+      h("div", { style: "font-size:16px;font-weight:600" }, t("verifyGateTitle")),
+      h("p", { class: "note", style: "margin-top:6px" }, t("verifyGateSub")),
+      h("div", { class: "btns", style: "margin-top:14px" }, h("button", { class: "primary", style: "width:100%", onclick: () => startVerify(v) }, t("beginVerify")))));
+  } else if (!terminal && addr) {
     card.append(h("div", { class: "fund" },
       h("div", { class: "muted" }, funded ? t(funded.unconfirmed ? "coinPendingCheck" : "coinLockedCheck", { coin: send }) : t("sendExactly", { coin: send })),
       h("div", { class: "amt" }, `${sats(sendSats(v))} ${send}`),
@@ -814,6 +822,47 @@ function renderLive(card, v) {
   // permalink resumes straight to this final status instead of the join flow. It's filtered out of the
   // "resume in-progress" list on the chooser.
   if (terminal && flow.client && !flow._doneSaved) { flow._doneSaved = true; vault.save({ ...flow.client.secrets(), done: true }).catch(() => {}); }
+}
+
+// ── address verification (defends a naive user handed a tampered link) ─────────
+// Before the deposit address is ever shown, walk the user through confirming that the coins they will
+// RECEIVE and any REFUND both land at addresses THEY control. Live re-renders are paused while verifying
+// (the client keeps running; we just hold its onUpdate) and resumed on success.
+function verifyAddr(v, which) {
+  const { send, recv } = roleCoins(), self = flow.client?.view?.self || v.self || {};
+  const coin = which === "receive" ? recv : send;
+  const addr = which === "receive" ? (recv === "QBT" ? self.qbitDest : self.btcDest) : (send === "QBT" ? self.qbitDest : self.btcDest);
+  return { coin, addr };
+}
+function startVerify(v) {
+  if (flow.client) flow.client.onUpdate = () => {};   // hold live re-renders during the steps
+  renderVerify(v, "receive");
+}
+function renderVerify(v, which) {
+  const { coin, addr } = verifyAddr(v, which);
+  while (liveCard.firstChild) liveCard.removeChild(liveCard.firstChild);
+  liveCard.append(
+    h("div", { style: "font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--mut)" }, t("verifyStep", { n: which === "receive" ? "1" : "2" })),
+    h("h2", { style: "margin:6px 0 4px" }, which === "receive" ? t("verifyRecvTitle") : t("verifyRefundTitle")),
+    h("p", { class: "note" }, which === "receive" ? t("verifyRecvSub", { coin }) : t("verifyRefundSub", { coin })),
+    h("div", { class: "mono", style: "background:var(--panel2);padding:12px;border-radius:8px;word-break:break-all;font-size:13px;margin:14px 0;border:1px solid var(--line)" }, addr || "—"),
+    h("p", { style: "font-weight:640;font-size:16px" }, which === "receive" ? t("verifyRecvQ", { coin }) : t("verifyRefundQ", { coin })),
+    h("div", { style: "display:flex;gap:10px;margin-top:12px" },
+      h("button", { class: "primary", style: "flex:1", onclick: () => (which === "receive" ? renderVerify(v, "refund") : verifyDone(v)) }, t("verifyYes")),
+      h("button", { style: "flex:1", onclick: () => verifyFail() }, t("verifyNo"))));
+}
+function verifyDone(v) {
+  flow.verified = true;
+  if (flow.client) flow.client.onUpdate = (vv) => renderLive(liveCard, vv);   // resume live updates
+  renderLive(liveCard, flow.client?.view || v);
+}
+function verifyFail() {
+  liveGuard = { risky: false };
+  while (liveCard.firstChild) liveCard.removeChild(liveCard.firstChild);
+  liveCard.append(
+    h("h2", { style: "color:var(--bad)" }, t("verifyFailTitle")),
+    h("p", { class: "note", style: "margin-top:4px" }, t("verifyFailBody")),
+    h("div", { class: "btns", style: "margin-top:14px" }, h("button", { class: "primary", style: "width:100%", onclick: () => goHome() }, t("verifyLeave"))));
 }
 function statusLine(v, send, recv) {
   const amCreator = flow.mode !== "join";     // I created/shared the swap (drives the "waiting to be joined" copy)
@@ -866,7 +915,7 @@ function renderChrome() {
 // Clicking the Qbit logo clears the current flow and returns to the home screen.
 function goHome() {
   flow.client?.stop?.(); stopJoinHeartbeat();
-  Object.assign(flow, { mode: null, role: null, direction: null, btcSats: 0, qbtSats: 0, receiveAddr: "", refundAddr: "", client: null, inviteLink: null, fee: null, _recoverySaved: false });
+  Object.assign(flow, { mode: null, role: null, direction: null, btcSats: 0, qbtSats: 0, receiveAddr: "", refundAddr: "", client: null, inviteLink: null, fee: null, verified: false, _recoverySaved: false });
   liveGuard = { risky: false };
   if (location.hash) history.replaceState(null, "", location.pathname + location.search);
   stepWelcome();   // always return to the hero landing, not the direction chooser

@@ -55,6 +55,15 @@ async function runDirection(browser, choiceText, label) {
   await B.waitForSelector("text=Your counterparty is online", { timeout: 20000 });
   console.log("  presence: both see counterparty online ✓");
 
+  // Address verification gate: each side must confirm their receive + refund addresses before the
+  // deposit address is revealed.
+  for (const pg of [A, B]) {
+    await pg.getByRole("button", { name: "Begin verification", exact: true }).click({ timeout: 20000 });
+    await clickBtn(pg, "Yes, it's mine");   // receiving address
+    await clickBtn(pg, "Yes, it's mine");   // refund address
+  }
+  console.log("  both verified their addresses ✓");
+
   await A.waitForSelector(".fund .mono", { timeout: 20000 });
   await B.waitForSelector(".fund .mono", { timeout: 20000 });
   await fundAddr((await depositAddr(A)).trim());          // user sends — here the node wallets stand in
