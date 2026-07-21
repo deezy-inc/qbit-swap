@@ -108,8 +108,22 @@ const FEE_ON = FEE_BPS > 0 && !!FEE_KEY;
 // has already populated `swaps`), so a restart never reissues a fee address. A fresh one per swap; gaps ok.
 let feeNextIndex = 1 + [...swaps.values()].reduce((m, s) => Math.max(m, s.fee?.index ?? -1), -1);
 if (FEE_ON) {
-  try { console.log(`[fee] ${FEE_BPS} bps · watch-only taproot (${FEE_NETWORK}); index 0 → ${validateFeeKey(FEE_KEY, FEE_NETWORK)}`); }
-  catch (e) { throw new Error(`FEE_DESCRIPTOR / FEE_XPUB is invalid: ${e.message}`); }
+  try {
+    const a0 = validateFeeKey(FEE_KEY, FEE_NETWORK);   // parses the xpub/descriptor and derives index 0
+    // Optional startup assertion: if the operator pins an address they KNOW their wallet owns at a known
+    // path, refuse to start unless the configured xpub reproduces it — so a wrong or typo'd xpub can
+    // never route real fees to a wallet nobody controls. Path is "branch/index" (default 0/0).
+    if (process.env.FEE_VERIFY_ADDRESS) {
+      const want = process.env.FEE_VERIFY_ADDRESS.trim();
+      const seg = (process.env.FEE_VERIFY_ADDRESS_PATH || "0/0").split("/").filter(Boolean).map(Number);
+      const index = seg.length ? seg[seg.length - 1] : 0, branch = seg.length >= 2 ? seg[seg.length - 2] : 0;
+      const got = feeAddress(FEE_KEY, index, FEE_NETWORK, branch);
+      if (got !== want) throw new Error(`FEE_XPUB does not derive FEE_VERIFY_ADDRESS at ${branch}/${index} — got ${got}, expected ${want}. Check the xpub/path.`);
+      console.log(`[fee] ${FEE_BPS} bps · xpub VERIFIED against ${want} at ${branch}/${index} ✓ (${FEE_NETWORK})`);
+    } else {
+      console.log(`[fee] ${FEE_BPS} bps · watch-only taproot (${FEE_NETWORK}); index 0 → ${a0}  (tip: set FEE_VERIFY_ADDRESS to assert the xpub on startup)`);
+    }
+  } catch (e) { throw new Error(`fee config invalid: ${e.message}`); }
 }
 // A swap's coordinator fee (or null when off / below the floor): a fresh address + the sats charged.
 function deriveFee(btcSats) {
