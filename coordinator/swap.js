@@ -374,7 +374,7 @@ export async function broadcast(s, leg, kind, txHex) {
 // on their behalf so a swap completes/refunds even if both tabs close. Non-custodial: every stored tx
 // pays only its owner's address, and the coordinator holds no keys — it can only help, never redirect.
 export function submitFinish(s, role, bundle) {
-  if (!bundle?.claim?.tiers?.length || !bundle?.refund?.tx) throw new Error("finish bundle needs claim.tiers[] and refund.tx");
+  if (!bundle?.claim?.tiers?.length || !bundle?.refund?.tiers?.length) throw new Error("finish bundle needs claim.tiers[] and refund.tiers[]");
   s.finish[role] = bundle;
   return touch(s);
 }
@@ -397,12 +397,14 @@ async function wtSend(s, role, leg, kind, txHex, tier) {
   await applyEffects(s, leg, kind, txid);
   return true;
 }
-// Broadcast a party's pre-signed claim at a specific ladder tier (splicing in the now-public preimage
-// for the participant's version). The caller chooses the tier from the live fastest-fee target.
-async function wtClaim(s, role, leg, tier) {
-  const b = s.finish[role].claim;                 // { leg, needsPreimage, tiers:[{feerate,tx}] }
-  const txHex = b.needsPreimage ? splicePreimage(b.tiers[tier].tx, s.preimage) : b.tiers[tier].tx;
-  return wtSend(s, role, leg, "claim", txHex, tier);
+// Broadcast a party's pre-signed claim OR refund at a specific ladder tier (both are fee-laddered now),
+// splicing in the now-public preimage for the participant's claim. Caller chooses the tier from the
+// live fastest-fee target.
+async function wtBroadcast(s, role, leg, kind, tier) {
+  const b = s.finish[role][kind];                 // { leg, needsPreimage?, tiers:[{feerate,tx}] }
+  const raw = b.tiers[tier].tx;
+  const txHex = (kind === "claim" && b.needsPreimage) ? splicePreimage(raw, s.preimage) : raw;
+  return wtSend(s, role, leg, kind, txHex, tier);
 }
 // Called every watcher tick. The watchtower is a FALLBACK: it only acts for a party that's actually
 // OFFLINE (presence, with its ~15s grace) — an online client finishes its own swap, so the watchtower
@@ -414,13 +416,14 @@ export async function driveWatchtower(s) {
   const away = (role) => !isOnline(s, role);   // only step in for a party that has left
 
   // a) offline initiator's claim of toLeg once matured -> reveals the preimage on-chain
-  if (s.state === "CLAIMABLE" && away("alice") && s.finish.alice?.claim && unspent(toLeg) && !s.wt["alice:claim"]) await wtClaim(s, "alice", toLeg, await pickTier(toLeg, s.finish.alice.claim.tiers));
+  if (s.state === "CLAIMABLE" && away("alice") && s.finish.alice?.claim && unspent(toLeg) && !s.wt["alice:claim"]) await wtBroadcast(s, "alice", toLeg, "claim", await pickTier(toLeg, s.finish.alice.claim.tiers));
   // b) offline participant's claim of fromLeg once the preimage is public (spliced in)
-  if (s.preimage && away("bob") && s.finish.bob?.claim && unspent(fromLeg) && !s.wt["bob:claim"]) await wtClaim(s, "bob", fromLeg, await pickTier(fromLeg, s.finish.bob.claim.tiers));
-  // c) abort refunds after each leg's timelock (only while no preimage — else the claim path applies)
+  if (s.preimage && away("bob") && s.finish.bob?.claim && unspent(fromLeg) && !s.wt["bob:claim"]) await wtBroadcast(s, "bob", fromLeg, "claim", await pickTier(fromLeg, s.finish.bob.claim.tiers));
+  // c) abort refunds after each leg's timelock (only while no preimage — else the claim path applies),
+  //    sized to the live fastest fee from the pre-signed refund ladder.
   if (!s.preimage && s.locktimes) {
-    if (away("alice") && s.finish.alice?.refund && unspent(fromLeg) && (H[fromLeg] || 0) >= s.locktimes[fromLeg] && !s.wt["alice:refund"]) await wtSend(s, "alice", fromLeg, "refund", s.finish.alice.refund.tx, "r");
-    if (away("bob") && s.finish.bob?.refund && unspent(toLeg) && (H[toLeg] || 0) >= s.locktimes[toLeg] && !s.wt["bob:refund"]) await wtSend(s, "bob", toLeg, "refund", s.finish.bob.refund.tx, "r");
+    if (away("alice") && s.finish.alice?.refund && unspent(fromLeg) && (H[fromLeg] || 0) >= s.locktimes[fromLeg] && !s.wt["alice:refund"]) await wtBroadcast(s, "alice", fromLeg, "refund", await pickTier(fromLeg, s.finish.alice.refund.tiers));
+    if (away("bob") && s.finish.bob?.refund && unspent(toLeg) && (H[toLeg] || 0) >= s.locktimes[toLeg] && !s.wt["bob:refund"]) await wtBroadcast(s, "bob", toLeg, "refund", await pickTier(toLeg, s.finish.bob.refund.tiers));
   }
   // d) Fee management for the watchtower's own claims. We (re)broadcast ONLY when the funding is
   //    genuinely unspent ON-CHAIN (mempool included) — i.e. no claim is in flight or mined, whether ours
@@ -430,13 +433,14 @@ export async function driveWatchtower(s) {
   //    gets evicted under fee pressure → funding unspent → re-sent here. The re-send follows the LIVE
   //    fastest-fee recommendation, floored at the tier last used — so a drop for a non-fee reason
   //    re-sends the same tier, a fee spike steps it up. testAccept no-ops it if nothing needs changing.
-  for (const [role, leg] of [["alice", toLeg], ["bob", fromLeg]]) {
-    const rec = s.wt[`${role}:claim`], b = s.finish[role]?.claim, f = s.funding[leg];
+  for (const [role, kind, leg] of [["alice", "claim", toLeg], ["bob", "claim", fromLeg], ["alice", "refund", fromLeg], ["bob", "refund", toLeg]]) {
+    const rec = s.wt[`${role}:${kind}`], b = s.finish[role]?.[kind], f = s.funding[leg];
     if (!rec || !b || !away(role) || !f) continue;
-    if (!(await chainOf(leg).isUnspent(f.txid, f.vout))) continue;   // a claim (ours or theirs) is in the mempool/chain → don't interfere
+    if (kind === "refund" && s.preimage) continue;                   // abort refunds are moot once the secret is out
+    if (!(await chainOf(leg).isUnspent(f.txid, f.vout))) continue;   // a spend (ours or theirs) is in the mempool/chain → don't interfere
     const tier = Math.max(rec.tier, await pickTier(leg, b.tiers));   // live fastest-fee tier, never downgraded
-    s.wt[`${role}:claim`] = null;
-    if (!(await wtClaim(s, role, leg, tier))) s.wt[`${role}:claim`] = rec;   // couldn't re-send (e.g. mined between ticks) → keep the record
+    s.wt[`${role}:${kind}`] = null;
+    if (!(await wtBroadcast(s, role, leg, kind, tier))) s.wt[`${role}:${kind}`] = rec;   // couldn't re-send (e.g. mined between ticks) → keep the record
   }
   touch(s);
 }

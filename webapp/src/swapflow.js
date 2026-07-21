@@ -210,18 +210,19 @@ export class SwapClient {
     const key = `${v.funding.btc.txid}:${v.funding.btc.vout}|${v.funding.qbit.txid}:${v.funding.qbit.vout}`;
     if (this.armedKey === key) return;
     const { claim, refund } = this.legs(v);
+    // Build a fee-ladder of pre-signed txs for a leg/kind: skip any tier whose fee would leave a dust or
+    // negative output (defensive; createSwap already floors amounts), always keeping at least the lowest.
+    const ladderOf = async (leg, kind, pre, xvb) => {
+      const amt = v.funding[leg].amountSats;
+      const aff = LADDER[leg].map((fr) => ({ fr, fee: feeFor(leg, kind, fr, v.feerates, xvb) })).filter(({ fee }) => amt - fee > DUST);
+      const use = aff.length ? aff : [{ fr: LADDER[leg][0], fee: feeFor(leg, kind, LADDER[leg][0], v.feerates, xvb) }];
+      return Promise.all(use.map(async ({ fr, fee }) => ({ feerate: fr, tx: hex(await this.#build(v, leg, kind, pre, fee)) })));
+    };
     // participant signs the claim preimage-LESS (the coordinator splices the preimage in on reveal).
     const claimPreimage = this.role === "alice" ? this.secret : new Uint8Array(0);
-    // skip any tier whose fee would leave a dust/negative output (defensive; createSwap already floors amounts)
-    const amount = v.funding[claim].amountSats, xvb = feeVbytes(v, claim, "claim");   // +vbytes if this claim carries the fee output
-    const affordable = LADDER[claim].map((fr) => ({ fr, fee: feeFor(claim, "claim", fr, v.feerates, xvb) })).filter(({ fee }) => amount - fee > DUST);
-    const tiers = await Promise.all((affordable.length ? affordable : [{ fr: LADDER[claim][0], fee: feeFor(claim, "claim", LADDER[claim][0], v.feerates, xvb) }]).map(async ({ fr, fee }) =>
-      ({ feerate: fr, tx: hex(await this.#build(v, claim, "claim", claimPreimage, fee)) })));
-    const refundFeerate = LADDER[refund][Math.floor(LADDER[refund].length / 2)];
-    const refundTx = hex(await this.#build(v, refund, "refund", new Uint8Array(0), feeFor(refund, "refund", refundFeerate, v.feerates)));
     const bundle = {
-      claim: { leg: claim, needsPreimage: this.role !== "alice", tiers },
-      refund: { leg: refund, tx: refundTx },
+      claim: { leg: claim, needsPreimage: this.role !== "alice", tiers: await ladderOf(claim, "claim", claimPreimage, feeVbytes(v, claim, "claim")) },
+      refund: { leg: refund, tiers: await ladderOf(refund, "refund", new Uint8Array(0), 0) },   // no coordinator-fee output on a refund
     };
     await this.#api(`/swaps/${this.id}/finish`, { token: this.token, method: "POST", body: bundle });
     // Keep our own copy of the pre-signed recovery ladder so it can be written into the backup file —
