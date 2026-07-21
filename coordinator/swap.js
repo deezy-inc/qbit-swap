@@ -426,7 +426,10 @@ export async function broadcast(s, leg, kind, txHex) {
 // on their behalf so a swap completes/refunds even if both tabs close. Non-custodial: every stored tx
 // pays only its owner's address, and the coordinator holds no keys — it can only help, never redirect.
 export function submitFinish(s, role, bundle) {
-  if (!bundle?.claim?.tiers?.length || !bundle?.refund?.tiers?.length) throw new Error("finish bundle needs claim.tiers[] and refund.tiers[]");
+  // A normal swap arms claim + refund; an underfunded deposit arms a refund ONLY (there is no completion
+  // path). So require refund.tiers; claim.tiers is optional (and, when present, must be non-empty).
+  if (!bundle?.refund?.tiers?.length) throw new Error("finish bundle needs refund.tiers[]");
+  if (bundle.claim && !bundle.claim.tiers?.length) throw new Error("finish bundle claim.tiers[] must be non-empty when present");
   s.finish[role] = bundle;
   return touch(s);
 }
@@ -469,12 +472,15 @@ async function wtBroadcast(s, role, leg, kind, tier) {
 export async function driveWatchtower(s) {
   if (!s.roles || !s.htlc || ["CREATED", "CANCELED", ...TERMINAL].includes(s.state)) return;
   const { fromLeg, toLeg } = s.roles, H = s.heights || {};
-  const unspent = (leg) => s.funding[leg] && !s.funding[leg].spent;
+  const unspent = (leg) => { const f = s.funding[leg] || s.shortFunded?.[leg]; return !!f && !f.spent; };   // shortFunded → refund an underfunded deposit
+  // NEVER claim (reveal/settle) while ANY leg is underfunded: the swap can't complete safely, and claiming
+  // the counterparty's coin against an underfunded deposit would rob them. Underfunding only ever refunds.
+  const canClaim = !s.shortFunded;
 
   // a) initiator's claim of toLeg once matured (CLAIMABLE) -> reveals the preimage on-chain
-  if (s.state === "CLAIMABLE" && s.finish.alice?.claim && unspent(toLeg) && !s.wt["alice:claim"]) await wtBroadcast(s, "alice", toLeg, "claim", await pickTier(toLeg, s.finish.alice.claim.tiers));
+  if (canClaim && s.state === "CLAIMABLE" && s.finish.alice?.claim && unspent(toLeg) && !s.wt["alice:claim"]) await wtBroadcast(s, "alice", toLeg, "claim", await pickTier(toLeg, s.finish.alice.claim.tiers));
   // b) participant's claim of fromLeg once the preimage is public (spliced in)
-  if (s.preimage && s.finish.bob?.claim && unspent(fromLeg) && !s.wt["bob:claim"]) await wtBroadcast(s, "bob", fromLeg, "claim", await pickTier(fromLeg, s.finish.bob.claim.tiers));
+  if (canClaim && s.preimage && s.finish.bob?.claim && unspent(fromLeg) && !s.wt["bob:claim"]) await wtBroadcast(s, "bob", fromLeg, "claim", await pickTier(fromLeg, s.finish.bob.claim.tiers));
   // c) abort refunds after each leg's timelock (only while no preimage — else the claim path applies),
   //    sized to the live fastest fee from the pre-signed refund ladder.
   if (!s.preimage && s.locktimes) {
@@ -490,7 +496,8 @@ export async function driveWatchtower(s) {
   //    fastest-fee recommendation, floored at the tier last used — so a drop for a non-fee reason
   //    re-sends the same tier, a fee spike steps it up. testAccept no-ops it if nothing needs changing.
   for (const [role, kind, leg] of [["alice", "claim", toLeg], ["bob", "claim", fromLeg], ["alice", "refund", fromLeg], ["bob", "refund", toLeg]]) {
-    const rec = s.wt[`${role}:${kind}`], b = s.finish[role]?.[kind], f = s.funding[leg];
+    if (kind === "claim" && !canClaim) continue;                      // never (re)send a claim while any leg is underfunded
+    const rec = s.wt[`${role}:${kind}`], b = s.finish[role]?.[kind], f = s.funding[leg] || s.shortFunded?.[leg];   // shortFunded → manage the underfunded refund
     if (!rec || !b || !f) continue;
     if (kind === "refund" && s.preimage) continue;                   // abort refunds are moot once the secret is out
     if (!(await chainOf(leg).isUnspent(f.txid, f.vout))) continue;   // a spend (ours or theirs) is in the mempool/chain → don't interfere

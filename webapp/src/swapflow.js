@@ -173,7 +173,7 @@ export class SwapClient {
     if (!v.htlc) return;
     // Arm the coordinator watchtower once BOTH legs are funded: pre-sign a fee-ladder claim + a refund
     // so the swap completes/refunds even if this tab closes. Non-custodial — pays only our addresses.
-    if (v.funding?.btc && v.funding?.qbit) { try { await this.armSafetyNet(v); } catch { /* retry next tick */ } }
+    if ((v.funding?.btc && v.funding?.qbit) || v.shortFunded?.[this.legs(v).fund]) { try { await this.armSafetyNet(v); } catch { /* retry next tick */ } }
 
     const done = (k) => this.acted.has(k) || v.broadcasts?.[k];
     const { claim, refund } = this.legs(v);
@@ -220,27 +220,35 @@ export class SwapClient {
 
   // ── watchtower safety net: pre-sign and upload a fee-ladder claim + a refund ──
   async armSafetyNet(v) {
-    if (!v.htlc || !v.funding?.btc || !v.funding?.qbit) return;
-    // Arm as soon as both deposits exist — even at 0-conf: the outpoints are known, so the recovery
-    // txs can be pre-signed now. Re-key if a deposit is RBF-replaced (new outpoint) before it confirms,
-    // so the stored bundle always references the live outpoints.
-    const key = `${v.funding.btc.txid}:${v.funding.btc.vout}|${v.funding.qbit.txid}:${v.funding.qbit.vout}`;
+    if (!v.htlc) return;
+    const { fund, claim, refund } = this.legs(v);
+    const bothFunded = v.funding?.btc && v.funding?.qbit;
+    // Underfunded MY leg: the swap can't complete, but the deposit is a real HTLC UTXO — pre-sign ONLY its
+    // refund so the watchtower reclaims it after the timelock even if this tab never comes back.
+    const shortMine = !bothFunded ? v.shortFunded?.[fund] : null;
+    if (!bothFunded && !shortMine) return;
+    // Arm as soon as the deposit(s) exist — even at 0-conf: the outpoints are known, so the recovery txs
+    // can be pre-signed now. Re-key on the live outpoints so a replaced/underfunded deposit re-arms.
+    const key = bothFunded
+      ? `${v.funding.btc.txid}:${v.funding.btc.vout}|${v.funding.qbit.txid}:${v.funding.qbit.vout}`
+      : `short:${shortMine.txid}:${shortMine.vout}`;
     if (this.armedKey === key) return;
-    const { claim, refund } = this.legs(v);
     // Build a fee-ladder of pre-signed txs for a leg/kind: skip any tier whose fee would leave a dust or
     // negative output (defensive; createSwap already floors amounts), always keeping at least the lowest.
     const ladderOf = async (leg, kind, pre, xvb) => {
-      const amt = v.funding[leg].amountSats;
+      const amt = (v.funding?.[leg] || v.shortFunded?.[leg]).amountSats;   // shortFunded → underfunded refund
       const aff = LADDER[leg].map((fr) => ({ fr, fee: feeFor(leg, kind, fr, v.feerates, xvb) })).filter(({ fee }) => amt - fee > DUST);
       const use = aff.length ? aff : [{ fr: LADDER[leg][0], fee: feeFor(leg, kind, LADDER[leg][0], v.feerates, xvb) }];
       return Promise.all(use.map(async ({ fr, fee }) => ({ feerate: fr, tx: hex(await this.#build(v, leg, kind, pre, fee)) })));
     };
     // participant signs the claim preimage-LESS (the coordinator splices the preimage in on reveal).
     const claimPreimage = this.role === "alice" ? this.secret : new Uint8Array(0);
-    const bundle = {
-      claim: { leg: claim, needsPreimage: this.role !== "alice", tiers: await ladderOf(claim, "claim", claimPreimage, feeVbytes(v, claim, "claim")) },
-      refund: { leg: refund, tiers: await ladderOf(refund, "refund", new Uint8Array(0), 0) },   // no coordinator-fee output on a refund
-    };
+    const bundle = bothFunded
+      ? {
+          claim: { leg: claim, needsPreimage: this.role !== "alice", tiers: await ladderOf(claim, "claim", claimPreimage, feeVbytes(v, claim, "claim")) },
+          refund: { leg: refund, tiers: await ladderOf(refund, "refund", new Uint8Array(0), 0) },   // no coordinator-fee output on a refund
+        }
+      : { refund: { leg: refund, tiers: await ladderOf(refund, "refund", new Uint8Array(0), 0) } };   // underfunded → refund only (no claim path)
     // Keep our own copy of the pre-signed recovery ladder BEFORE the POST — the file alone (keys + these
     // txs) is enough to recover even if the coordinator is gone, AND the coordinator emits the "armed"
     // view update the instant it receives the bundle (over SSE, before this POST's own response

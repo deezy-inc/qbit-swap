@@ -958,7 +958,11 @@ function renderLive(card, v) {
         const readyAt = () => (Date.now() + (flow._clockOffset || 0)) + Math.max(0, r.at - (v.heights?.[rl] || 0)) * (AVG_BLOCK[rl] || 600) * 1000;
         const cd = h("span", { class: "mono", style: "font-weight:700;color:var(--ink)" }, fmtHMS(readyAt() - (Date.now() + (flow._clockOffset || 0))));
         card.append(h("p", { class: "note", style: "margin-top:10px" }, t("shortRecoverIn", { coin }), " ", cd));
-        card.append(h("p", { class: "note", style: "margin-top:4px" }, t("shortRecoverReturn")));
+        // If the watchtower already holds his signed refund, he's covered even if he closes the tab; if not,
+        // he must come back with his recovery file.
+        card.append(v.safetyNet?.self
+          ? h("p", { class: "note", style: "margin-top:4px;color:var(--good)" }, t("shortRecoverArmed", { coin }))
+          : h("p", { class: "note", style: "margin-top:4px" }, t("shortRecoverReturn")));
         const target = readyAt();
         flow._countdown = setInterval(() => { const rem = target - (Date.now() + (flow._clockOffset || 0)); cd.textContent = fmtHMS(rem); if (rem <= 0) clearInterval(flow._countdown); }, 1000);
       }
