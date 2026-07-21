@@ -174,7 +174,7 @@
   .tl-icon.done { color:var(--accent-ink); background:var(--accent); }
   .tl-icon.active { color:var(--accent); border:2px solid var(--accent); animation:pulse 2s infinite; }
   .tl-icon.todo { color:var(--mut); border:1px solid var(--line); font-size:8px; }
-  .tl-body { padding-top:1px; line-height:1.35; }
+  .tl-body { padding-top:1px; line-height:1.35; flex:1; min-width:0; }
   .tl-label { color:var(--ink); font-size:14.5px; font-weight:550; }
   .tl-step.todo .tl-label { color:var(--mut); font-weight:400; }
   .tl-tx { display:block; font-size:12px; margin-top:1px; }
@@ -182,6 +182,9 @@
   .tl-tx a:hover { text-decoration:underline; }
   .tl-mem { color:var(--warn); }
   .tl-conf { display:block; font-size:11.5px; color:var(--mut); margin-top:1px; font-variant-numeric:tabular-nums; }
+  /* The "do this now" box, rendered inline on the active step: reclaim the icon+gap indent (22+11px) so
+     the deposit address still spans the full card width and fits on one line. */
+  .tl-body .fund { margin:10px 0 4px -33px; }
 
   /* status badge — soft tinted fill, not just an outline */
   .badge { display:inline-flex; align-items:center; gap:6px; padding:4px 11px; border-radius:999px;

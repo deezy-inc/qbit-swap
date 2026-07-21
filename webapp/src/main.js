@@ -750,7 +750,7 @@ async function btcConfEta(txid) {
 // A persistent progress timeline for the swap: every step stays visible (matched → you sent →
 // counterparty sent → you received / refunded), each with a checkmark and a link to the transaction
 // on a public explorer, so the whole history — including the final txid — remains on the page.
-function swapTimeline(v, send, recv) {
+function swapTimeline(v, send, recv, action) {
   const fundLeg = coinLeg(send), claimLeg = coinLeg(recv);
   const myFund = v.funding?.[fundLeg], cpFund = v.funding?.[claimLeg];
   const myClaim = v.broadcasts?.[`${claimLeg}:claim`];      // the tx that delivers your received coin
@@ -787,7 +787,9 @@ function swapTimeline(v, send, recv) {
         s.fund ? ((c) => c ? h("span", { class: "tl-conf" }, c) : null)(confSub(v, s.leg, s.fund)) : null,
         // While a deposit is sent-but-not-buried, explain WHY the confirmation is being awaited (staggered
         // funding) — plus a live BTC ETA from mempool.space sized on the tx's own fee rate.
-        (s.fund && s.reached && !s.done) ? fundWaitEl(s) : null));
+        (s.fund && s.reached && !s.done) ? fundWaitEl(s) : null,
+        // The "do this now" box sits INLINE on the step we're currently on.
+        (state === "active" && action) ? action : null));
   }));
 }
 
@@ -851,41 +853,31 @@ function renderLive(card, v) {
   // offered: the single backup taken at setup already holds the private keys, and the app regenerates the
   // claim/refund txs from those keys on resume — so one download is all the user ever needs.
   if (!terminal && armed && flow.client?.recovery && !flow._recoverySaved) { vault.save(flow.client.secrets()).catch(() => {}); flow._recoverySaved = true; }
-  // Show what the receiver will net after the (mempool High-priority) claim fee. With a coordinator fee
-  // on, the BTC receiver nets the full amount (the fee output covers the network fee).
-  if (!terminal && v.feerates && v.htlc) {
-    const { net, fee } = netReceive(recv, v.feerates, feeSats(v) > 0);
-    card.append(h("p", { class: "note" }, fee > 0 ? t("netReceive", { net: sats(net), coin: recv, fee: feeStr(recv, fee) }) : t("netReceiveFull", { net: sats(net), coin: recv })));
-  }
-  if (!terminal && flow.mode === "create" && flow.inviteLink) {
-    card.append(h("div", { class: "btns", style: "margin-top:8px" }, copyButton("copyInvite", "inviteCopied", () => flow.inviteLink)));
-  }
-  // While waiting for the counterparty, let the creator go back to the share screen.
-  if (!terminal && !addr && flow.mode === "create") {
-    card.append(h("div", { style: "margin-top:14px" },
-      h("a", { href: "#", style: "color:var(--mut)", onclick: (e) => { e.preventDefault(); stepShare(); } }, t("back"))));
-  }
-
   // Funding window: countdown anchored to the SERVER clock (v.now) so it's immune to a wrong client clock.
   if (v.now) flow._clockOffset = v.now - Date.now();
   const msLeft = (!funded && v.fundBy) ? v.fundBy - (Date.now() + (flow._clockOffset || 0)) : null;
   const expired = msLeft != null && msLeft <= 0;
 
+  // The "do this now" box (expired · address-verification gate · sequenced-funding wait · deposit prompt).
+  // It renders INLINE on the active timeline step below — not as a banner above the timeline — so the page
+  // reads top-to-bottom and the action sits on the step we're actually on. It's null once there's nothing
+  // to do (our own deposit is buried, or we're only waiting on the counterparty — the timeline says so).
+  let action = null;
   if (!terminal && addr && expired) {
     // The funding window elapsed — the timelocks were fixed at setup, so funding this late is no longer
     // safe. Refuse to show the deposit address; send them to make a fresh swap.
-    card.append(h("div", { class: "fund" },
+    action = h("div", { class: "fund" },
       h("div", { style: "font-size:16px;font-weight:600;color:var(--bad)" }, t("fundExpiredTitle")),
       h("p", { class: "note", style: "margin-top:6px" }, t("fundExpiredBody")),
-      h("div", { class: "btns", style: "margin-top:14px" }, h("button", { class: "primary", style: "width:100%", onclick: () => goHome() }, t("verifyLeave")))));
+      h("div", { class: "btns", style: "margin-top:14px" }, h("button", { class: "primary", style: "width:100%", onclick: () => goHome() }, t("verifyLeave"))));
   } else if (!terminal && addr && !funded && !flow.verified) {
     // Gate the deposit address behind an explicit address check. A counterparty could hand you a link
     // where the receive/refund addresses aren't yours; you must confirm they're YOURS before any coins
     // move — so a naive user can't be talked into "just send to this address."
-    card.append(h("div", { class: "fund" },
+    action = h("div", { class: "fund" },
       h("div", { style: "font-size:16px;font-weight:600" }, t("verifyGateTitle")),
       h("p", { class: "note", style: "margin-top:6px" }, t("verifyGateSub")),
-      h("div", { class: "btns", style: "margin-top:14px" }, h("button", { class: "primary", style: "width:100%", onclick: () => startVerify(v) }, t("beginVerify")))));
+      h("div", { class: "btns", style: "margin-top:14px" }, h("button", { class: "primary", style: "width:100%", onclick: () => startVerify(v) }, t("beginVerify"))));
   } else if (!terminal && addr && !funded && v.fundGate && !v.fundGate.cleared) {
     // Sequenced funding: the QBT seller must not deposit until the buyer's BTC deposit is buried &
     // irreversible — otherwise the buyer could RBF-cancel the BTC after the QBT confirms, claim the QBT
@@ -893,18 +885,19 @@ function renderLive(card, v) {
     // Hold the deposit address; show progress toward clearance. (The buyer/alice is always cleared.)
     const g = v.fundGate;
     const status = !g.funded ? t("seqWaitNoBtc") : g.unconfirmed ? t("seqWaitMempool") : t("seqWaitConfs", { confs: g.confs, need: g.need });
-    card.append(h("div", { class: "fund" },
+    action = h("div", { class: "fund" },
       h("div", { style: "font-size:16px;font-weight:600" }, t("seqGateTitle")),
       h("p", { class: "note", style: "margin-top:6px" }, t("seqGateBody")),
-      h("p", { class: "note", style: "margin-top:10px;font-weight:600;color:var(--warn)" }, status)));
-  } else if (!terminal && addr) {
+      h("p", { class: "note", style: "margin-top:10px;font-weight:600;color:var(--warn)" }, status));
+  } else if (!terminal && addr && !fundBuried(v, fundLeg, funded)) {
+    // Deposit prompt — shown while our leg is not yet buried (still to send, or sent and confirming).
     const feerate = Math.max(1, Math.round(v.feerates?.[fundLeg]?.fastestFee || 0));
     const minsLeft = msLeft != null ? Math.max(0, Math.ceil(msLeft / 60000)) : null;
-    card.append(h("div", { class: "fund" },
+    action = h("div", { class: "fund" },
       h("div", { class: "muted" }, funded ? t(funded.unconfirmed ? "coinPendingCheck" : "coinLockedCheck", { coin: send }) : t("sendExactly", { coin: send })),
-      h("div", { style: "display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap" },
+      h("div", { style: "display:flex;align-items:center;gap:12px;flex-wrap:wrap" },
         h("div", { class: "amt" }, `${sats(sendSats(v))} ${send}`),
-        funded ? null : copyButton("copyAmount", "copiedCheck", () => amtStr(sendSats(v)))),   // copy the exact amount (grouping-free) to paste into a wallet
+        funded ? null : copyButton("copyAmount", "copiedCheck", () => amtStr(sendSats(v)))),   // copy button sits right next to the amount (not pushed to the far edge)
       feeBreakdown(v),
       // Deposit fee-rate guidance: the swap can't progress until this deposit confirms, so nudge the
       // sender to at least mempool's High-priority rate (BTC only — QBT is uncongested).
@@ -913,16 +906,32 @@ function renderLive(card, v) {
       send === "BTC" ? h("p", { class: "note", style: "margin-top:6px;color:var(--mut)" }, t(funded ? "seqBuyerFundedNote" : "seqBuyerNote")) : null,
       funded ? null : h("div", { class: "mono", style: "margin-top:6px" }, addr),
       funded ? null : h("div", { class: "btns" }, copyButton("copyAddress", "copiedCheck", () => addr)),
-      (!funded && minsLeft != null) ? h("p", { class: "note", style: `margin-top:10px;color:${minsLeft <= 10 ? "var(--warn)" : "var(--mut)"}` }, t("fundCountdown", { mins: minsLeft })) : null));
+      (!funded && minsLeft != null) ? h("p", { class: "note", style: `margin-top:10px;color:${minsLeft <= 10 ? "var(--warn)" : "var(--mut)"}` }, t("fundCountdown", { mins: minsLeft })) : null);
   }
+
+  // Persistent progress timeline — the primary structure — with the action box inlined on the current
+  // step, so it's always clear which step we're on. Each step keeps its explorer tx link, incl. after
+  // completion; its per-step "in mempool" tag surfaces 0-conf deposit detection on both legs.
+  if (v.htlc) card.append(swapTimeline(v, send, recv, action));
+  else if (action) card.append(action);   // pre-HTLC edge (addr implies htlc, so rare) — keep the action visible
+  // Bottom status line only when there's NO inline action box — otherwise it just repeats the prominent
+  // in-timeline status (e.g. "waiting for the BTC deposit to confirm"). With an action shown, it's noise.
+  if (!action) card.append(h("p", { class: "note" }, statusLine(v, send, recv)));
 
   // A deposit confirmed so slowly that it's now unsafe to complete — the swap will refund on its own.
   if (!terminal && v.tooLate) card.append(h("p", { class: "note", style: "color:var(--warn);font-weight:600;margin-top:10px" }, t("tooLateRefund")));
-
-  // Persistent progress timeline (each step + its explorer tx link stays on the page, incl. after
-  // completion). Its per-step "in mempool" tag surfaces 0-conf deposit detection on both legs.
-  if (v.htlc) card.append(swapTimeline(v, send, recv));
-  card.append(h("p", { class: "note" }, statusLine(v, send, recv)));
+  // Below the timeline: what the receiver nets after the claim fee, the invite-copy, and the back link.
+  if (!terminal && v.feerates && v.htlc) {
+    const { net, fee } = netReceive(recv, v.feerates, feeSats(v) > 0);
+    card.append(h("p", { class: "note" }, fee > 0 ? t("netReceive", { net: sats(net), coin: recv, fee: feeStr(recv, fee) }) : t("netReceiveFull", { net: sats(net), coin: recv })));
+  }
+  if (!terminal && flow.mode === "create" && flow.inviteLink) {
+    card.append(h("div", { class: "btns", style: "margin-top:8px" }, copyButton("copyInvite", "inviteCopied", () => flow.inviteLink)));
+  }
+  if (!terminal && !addr && flow.mode === "create") {
+    card.append(h("div", { style: "margin-top:14px" },
+      h("a", { href: "#", style: "color:var(--mut)", onclick: (e) => { e.preventDefault(); stepShare(); } }, t("back"))));
+  }
   if (!terminal && v.shortFunded) card.append(h("p", { class: "note", style: "color:var(--bad)" }, t("underfundWarn")));
   if (v.actionError) card.append(h("p", { class: "note", style: "color:var(--bad)" }, "⚠ " + v.actionError));
   // Either party can cancel while NOTHING is funded — clears stale swaps; the counterparty sees it.
