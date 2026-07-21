@@ -195,13 +195,23 @@ export class SwapClient {
     try {
       return await this.#api(`/swaps/${this.id}/broadcast`, { token: this.token, method: "POST", body: { leg, kind, tx: txHex } });
     } catch (e) {
+      // Benign: the spend already landed — the watchtower (or our own earlier broadcast) got there first,
+      // so the node rejects this as a duplicate / already-spent input. That's SUCCESS, not an error: leave
+      // `key` marked done and swallow it, so no spurious message flashes as the swap settles.
+      if (alreadySpent(e)) return { alreadyDone: true };
       const endpoints = leg === "btc" ? this.btcBroadcast : this.qbitBroadcast;
       if (endpoints.length) {
         try {
           const txid = await postRawTx(endpoints, txHex);
           this.onUpdate({ ...this.view, broadcastFallback: { leg, kind, txid } });   // surface that we bypassed the coordinator
           return { fallback: true, txid };
-        } catch (fe) { this.acted.delete(key); throw fe; }
+        } catch (fe) {
+          // The QBT public-mempool fallback is best-effort — NEVER surface its errors (the coordinator +
+          // watchtower are the authority on completion, and a duplicate/already-spent 400 is expected once
+          // the claim has landed). BTC still surfaces a genuine, non-already-spent failure.
+          if (leg === "qbit" || alreadySpent(fe)) return { alreadyDone: true };
+          this.acted.delete(key); throw fe;
+        }
       }
       this.acted.delete(key);   // total failure — let #act retry this leg on the next update
       throw e;
@@ -306,6 +316,10 @@ export const QBIT_BROADCAST = {
   qb: (globalThis.QBIT_BROADCAST_URLS?.qb) || [],
   tqb: (globalThis.QBIT_BROADCAST_URLS?.tqb) || [],
 };
+// A broadcast rejection that actually means "the spend already landed" — the input is gone (already
+// spent) or the tx is already known/in the mempool. Not a failure: the claim/refund is done. Covers
+// Bitcoin Core / Esplora reasons and RPC codes (-25 missing inputs, -26 already-in-chain, -27 already-known).
+const alreadySpent = (e) => /already|in[- ]?mempool|txn-already|missing[- ]?inputs|missingorspent|bad-txns-inputs|-2[567]\b/i.test(String(e?.message || e || ""));
 // POST a raw tx hex to each endpoint in turn; return the first accepted txid, or throw if none accept.
 // Injectable fetch for testing. Used by the coordinator-down BTC broadcast fallback.
 export async function postRawTx(endpoints, txHex, fetchImpl = fetch) {

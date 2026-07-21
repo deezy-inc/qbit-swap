@@ -102,6 +102,8 @@
   input.field-err:focus { border-color:var(--bad); box-shadow:0 0 0 3px var(--bad-soft); background:var(--bad-soft); }
   @keyframes fieldflash { 0%{ background:var(--bad-soft); } 40%{ background:rgba(236,106,117,.34); } 100%{ background:var(--bad-soft); } }
   input.field-err.flash { animation:fieldflash .45s ease-out; }
+  /* Small fee note tucked under an amount input, with breathing room before the next field. */
+  .fee-note { margin:7px 2px 13px; font-size:12.5px; color:var(--mut); line-height:1.45; }
   .row { display:flex; gap:12px; } .row > * { flex:1; min-width:0; }
 
   /* buttons — full state set + motion that conveys press/feedback */
@@ -193,7 +195,7 @@
   /* the deposit / amount panel — the pivotal moment of the flow */
   .fund { background:var(--surface-2); border:1px solid var(--line); border-radius:var(--r); padding:15px 16px; margin:14px 0 0; }
   .fund .amt { font-size:26px; font-weight:680; letter-spacing:-.02em; line-height:1.1; margin:5px 0; }
-  .fund .mono { display:block; background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:9px 11px; margin-top:8px; }
+  .fund .mono { display:block; background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:9px 9px; margin-top:8px; font-size:12px; letter-spacing:-.015em; }
 
   /* status dot for presence / safety net */
   .dot { width:8px; height:8px; border-radius:50%; flex:none; display:inline-block; }

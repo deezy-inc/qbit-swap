@@ -37,6 +37,10 @@ function validAddr(value, coin) {
 }
 
 const DEFAULT_COORD = globalThis.QBIT_COORDINATOR || "http://127.0.0.1:8787";
+// Per-chain feerates for the setup-screen fee estimate (cached once per page load; the swap view carries
+// its own live feerates thereafter). Best-effort — the note falls back to "…" if this can't be reached.
+let _feerates = null;
+const fetchFeerates = async () => (_feerates ||= await (await fetch(`${DEFAULT_COORD}/feerates`)).json());
 const FAUCET = globalThis.QBIT_TRIAL_FAUCET || null;
 const ORDERBOOK = globalThis.QBIT_ORDERBOOK === true;   // feature flag, default OFF — peer-to-peer only
 const RECENT_TRADES = globalThis.QBIT_RECENT_TRADES === true;   // feature flag, default OFF — public recent-trades tab
@@ -494,17 +498,27 @@ function stepAmount() {
   btcUsdPrice().then((u) => { usd = u; recompute(); validate(); });
   recompute();
 
+  // Per-box fee notes, sitting directly under the input each concerns:
+  //  · the BTC box carries the 2% platform-fee note (the buyer pays it; the seller sees who bears it).
+  //  · the QBT-RECEIVE box (buyer) carries the on-chain claim fee, with a LIVE estimate fetched from the
+  //    coordinator's feerates and sized with the same dynFee the real claim uses.
+  const sendNote = (send === "BTC" && FEE_BPS > 0) ? h("p", { class: "note fee-note" }, t("feeAdded", { pct: feePct() })) : null;
+  const recvNote = recv === "QBT"
+    ? h("p", { class: "note fee-note" }, t("qbtRecvFeeNote", { amt: "…" }))
+    : (recv === "BTC" && FEE_BPS > 0 ? h("p", { class: "note fee-note" }, t("feeAddedCounterparty", { pct: feePct() })) : null);
+  if (recv === "QBT") fetchFeerates()
+    .then((fr) => { recvNote.textContent = t("qbtRecvFeeNote", { amt: amtStr(dynFee("qbit", "claim", fr, 0)) }); })
+    .catch(() => {});
+
   render(screen({
     title: t("howMuch"),
     body: [
-      h("label", {}, t("youSendCoin", { coin: send })), sendIn,
-      h("label", {}, t("youReceiveCoin", { coin: recv })), recvIn,
+      h("label", {}, t("youSendCoin", { coin: send })), sendIn, sendNote,
+      h("label", {}, t("youReceiveCoin", { coin: recv })), recvIn, recvNote,
       h("div", { style: "display:flex;align-items:center;gap:9px;margin:14px 0 5px" },
         h("span", { style: "font-size:12.5px;font-weight:550;color:var(--mut)" }, t("priceLabel")), unitBtn),
       priceIn,
       errMsg,
-      // Fee note, direction-aware: the BTC buyer pays the fee, so tell whichever side is looking who bears it.
-      (FEE_BPS > 0) ? h("p", { class: "note", style: "margin-top:12px" }, t(send === "BTC" ? "feeAdded" : "feeAddedCounterparty", { pct: feePct() })) : null,
     ],
     cta: t("continue"),
     onCta: () => {
@@ -707,6 +721,32 @@ function confSub(v, leg, fund) {
   return t("confLine", { confs, target }) + (remaining > 0 ? etaCompact(remaining * (AVG_BLOCK[leg] || 60)) : "");
 }
 
+// Context-aware "waiting for confirmation" line under a sent-but-unconfirmed deposit — says WHY this
+// confirmation gates the next step (staggered funding), keyed by leg + whose deposit it is.
+function fundWaitEl(s) {
+  const key = s.leg === "btc" ? (s.mine ? "tlWaitBtcMine" : "tlWaitBtcCp") : (s.mine ? "tlWaitQbtMine" : "tlWaitQbtCp");
+  const el = h("span", { class: "tl-conf" }, t(key));
+  // Live BTC ETA (mainnet only): size the tx's fee rate against mempool.space's current tiers.
+  if (s.mem && s.leg === "btc" && EXPLORER.btc.includes("mempool.space") && s.txid)
+    btcConfEta(s.txid).then((eta) => { if (eta) el.textContent = `${t(key)} · ${t("tlEstConf", { eta })}`; }).catch(() => {});
+  return el;
+}
+const _etaCache = new Map();   // per-txid, so re-renders don't refetch
+async function btcConfEta(txid) {
+  if (_etaCache.has(txid)) return _etaCache.get(txid);
+  const base = EXPLORER.btc.replace(/\/tx\/$/, "/api");   // https://mempool.space/api
+  const [tx, rec] = await Promise.all([
+    fetch(`${base}/tx/${txid}`).then((r) => r.ok ? r.json() : Promise.reject()),
+    fetch(`${base}/v1/fees/recommended`).then((r) => r.ok ? r.json() : Promise.reject()),
+  ]);
+  const vsize = tx.weight ? tx.weight / 4 : (tx.vsize || tx.size);
+  const rate = tx.fee && vsize ? tx.fee / vsize : 0;
+  const mins = rate >= rec.fastestFee ? 10 : rate >= rec.halfHourFee ? 30 : rate >= rec.hourFee ? 60 : 120;
+  const eta = mins < 60 ? `~${mins} min` : `~${Math.round(mins / 60)} hr`;
+  _etaCache.set(txid, eta);
+  return eta;
+}
+
 // A persistent progress timeline for the swap: every step stays visible (matched → you sent →
 // counterparty sent → you received / refunded), each with a checkmark and a link to the transaction
 // on a public explorer, so the whole history — including the final txid — remains on the page.
@@ -720,10 +760,19 @@ function swapTimeline(v, send, recv) {
   // checkmark only fills once that deposit is BURIED to its required depth (`done`) — not merely seen in
   // the mempool. So a funding step reads "You sent BTC · in mempool · 0 / 1 confirmations" with a hollow
   // ring until it confirms, then fills. (`reached` defaults to `done` for steps without a funding tx.)
+  // The two funding steps, ordered by the actual funding SEQUENCE — fromLeg (BTC) is deposited first,
+  // then toLeg (QBT) — not self-first. So the QBT seller sees "Counterparty sends BTC" BEFORE "You send
+  // QBT", matching the staggered flow (they can't deposit until the BTC confirms anyway).
+  const fromLeg = v.roles?.fromLeg || "btc", toLeg = v.roles?.toLeg || "qbit";
+  const fundStep = (leg) => {
+    const mine = leg === fundLeg, coin = mine ? send : recv, fund = v.funding?.[leg];
+    return { label: (d) => t(mine ? (d ? "tlYouSent" : "tlYouSend") : (d ? "tlCpSent" : "tlCpSend"), { coin }),
+             done: fundBuried(v, leg, fund), reached: !!fund, leg, mine, txid: fund?.txid, mem: fund?.unconfirmed, fund };
+  };
   const steps = [
     { label: () => t("tlMatched"), done: !!v.htlc },
-    { label: (d) => t(d ? "tlYouSent" : "tlYouSend", { coin: send }), done: fundBuried(v, fundLeg, myFund), reached: !!myFund, leg: fundLeg, txid: myFund?.txid, mem: myFund?.unconfirmed, fund: myFund },
-    { label: (d) => t(d ? "tlCpSent" : "tlCpSend", { coin: recv }), done: fundBuried(v, claimLeg, cpFund), reached: !!cpFund, leg: claimLeg, txid: cpFund?.txid, mem: cpFund?.unconfirmed, fund: cpFund },
+    fundStep(fromLeg),
+    fundStep(toLeg),
   ];
   if (refunded) steps.push({ label: () => t("tlRefunded", { coin: send }), done: !!myRefund, leg: fundLeg, txid: myRefund });
   else steps.push({ label: (d) => t(d ? "tlYouReceived" : "tlYouReceive", { coin: recv }), done: complete || !!myClaim, leg: claimLeg, txid: myClaim });
@@ -735,7 +784,10 @@ function swapTimeline(v, send, recv) {
       h("div", { class: "tl-body" },
         h("span", { class: "tl-label" }, s.label(s.reached ?? s.done)),
         s.txid ? h("span", { class: "tl-tx" }, s.mem ? h("span", { class: "tl-mem" }, t("tlMempool") + " · ") : null, txLink(s.leg, s.txid)) : null,
-        s.fund ? ((c) => c ? h("span", { class: "tl-conf" }, c) : null)(confSub(v, s.leg, s.fund)) : null));
+        s.fund ? ((c) => c ? h("span", { class: "tl-conf" }, c) : null)(confSub(v, s.leg, s.fund)) : null,
+        // While a deposit is sent-but-not-buried, explain WHY the confirmation is being awaited (staggered
+        // funding) — plus a live BTC ETA from mempool.space sized on the tx's own fee rate.
+        (s.fund && s.reached && !s.done) ? fundWaitEl(s) : null));
   }));
 }
 
@@ -755,7 +807,9 @@ function renderLive(card, v) {
   const headline = canceled ? t("swapCanceled")
     : v.state === "COMPLETE" ? t("swapComplete") : v.state === "REFUNDED" ? t("swapRefunded")
     : !addr ? t("waitingCounterparty")
-    : funded ? t(funded.unconfirmed ? "coinPending" : "coinLocked", { coin: send }) : t("sendToLock", { coin: send });
+    : funded ? t(funded.unconfirmed ? "coinPending" : "coinLocked", { coin: send })
+    : (v.fundGate && !v.fundGate.cleared) ? t("awaitingBtc")   // seller: sequenced funding holds them until BTC is sent — don't tell them to send yet
+    : t("sendToLock", { coin: send });
   card.append(h("div", { style: "display:flex;justify-content:space-between;align-items:center" },
     h("h2", { style: "margin:0" }, headline),
     h("span", { class: "badge " + (STATE_CLASS[v.state] || "") }, v.state)));
@@ -793,12 +847,10 @@ function renderLive(card, v) {
     card.append(h("div", { class: "note statusline", style: `margin-top:6px;color:${armed ? "var(--good)" : "var(--warn)"}` },
       h("span", {}, armed ? "🛡️" : "⏳"), armed ? t("armedNet") : t("armingNet")));
   }
-  // Watchtower is armed and we hold the pre-signed recovery ladder — let the user fold it into a backup.
-  if (!terminal && armed && flow.client?.recovery) {
-    if (!flow._recoverySaved) { vault.save(flow.client.secrets()).catch(() => {}); flow._recoverySaved = true; }
-    card.append(h("div", { class: "btns", style: "margin-top:6px" },
-      h("button", { onclick: () => saveFile(`qbit-swap-${flow.client.id.slice(0, 8)}-recovery.json`, exportBackup(flow.client.secrets())) }, t("downloadRecoveryBackup"))));
-  }
+  // Once armed, silently fold the pre-signed recovery ladder into the local vault. No SECOND download is
+  // offered: the single backup taken at setup already holds the private keys, and the app regenerates the
+  // claim/refund txs from those keys on resume — so one download is all the user ever needs.
+  if (!terminal && armed && flow.client?.recovery && !flow._recoverySaved) { vault.save(flow.client.secrets()).catch(() => {}); flow._recoverySaved = true; }
   // Show what the receiver will net after the (mempool High-priority) claim fee. With a coordinator fee
   // on, the BTC receiver nets the full amount (the fee output covers the network fee).
   if (!terminal && v.feerates && v.htlc) {
@@ -850,7 +902,9 @@ function renderLive(card, v) {
     const minsLeft = msLeft != null ? Math.max(0, Math.ceil(msLeft / 60000)) : null;
     card.append(h("div", { class: "fund" },
       h("div", { class: "muted" }, funded ? t(funded.unconfirmed ? "coinPendingCheck" : "coinLockedCheck", { coin: send }) : t("sendExactly", { coin: send })),
-      h("div", { class: "amt" }, `${sats(sendSats(v))} ${send}`),
+      h("div", { style: "display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap" },
+        h("div", { class: "amt" }, `${sats(sendSats(v))} ${send}`),
+        funded ? null : copyButton("copyAmount", "copiedCheck", () => amtStr(sendSats(v)))),   // copy the exact amount (grouping-free) to paste into a wallet
       feeBreakdown(v),
       // Deposit fee-rate guidance: the swap can't progress until this deposit confirms, so nudge the
       // sender to at least mempool's High-priority rate (BTC only — QBT is uncongested).
@@ -931,12 +985,20 @@ function statusLine(v, send, recv) {
   const amInitiator = flow.role === "alice";  // I hold the secret and claim first (the QBT buyer)
   if (!v.htlc) return amCreator ? t("stWaitJoin") : t("stSetup");
   switch (v.state) {
-    case "COMPLETE": return t("stReceived", { amt: sats(coinSats(recv)), coin: recv });
+    case "COMPLETE": return t("stReceived", { amt: sats(netReceive(recv, v.feerates, feeSats(v) > 0).net), coin: recv });   // net of the on-chain claim fee (the gross was never what landed)
     case "REFUNDED": return t("stReturned", { coin: send });
     case "CLAIMABLE": return amInitiator ? t("stBothFunded") : t("stWaitClaim");
     case "MATURING": return t("stMaturing");
     case "CLAIMED": return amInitiator ? t("stClaimed") : t("stPreimage");
-    default: return v.funding?.[coinLeg(send)] ? t("stWaitFund") : t("stWaitDeposit");
+    default: {
+      // Staggered funding: reflect what we're actually waiting on, not a generic prompt. BTC (fromLeg)
+      // must bury before the seller can fund QBT, so neither "send your deposit" nor "waiting for your
+      // counterparty to fund" is right until that happens.
+      const myFund = v.funding?.[coinLeg(send)];
+      const btcBuried = fundBuried(v, v.roles?.fromLeg || "btc", v.funding?.[v.roles?.fromLeg || "btc"]);
+      if (amInitiator) return !myFund ? t("stWaitDeposit") : !btcBuried ? t("stConfirmingBtc") : t("stWaitFund");
+      return !btcBuried ? t("stAwaitCpBtc") : !myFund ? t("stWaitDeposit") : t("stWaitSettle");
+    }
   }
 }
 

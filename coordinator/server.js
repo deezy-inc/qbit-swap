@@ -5,7 +5,7 @@ import http from "node:http";
 import { createSwap, getSwap, roleOf, submitParty, broadcast, view, poll, allSwaps, subscribe, markSeen, addConnection, dropConnection, sweepPresence, submitFinish, driveWatchtower, cancelSwap } from "./swap.js";
 import { createOffer, getOffer, isMaker, book, takeOffer, cancelOffer, makerView } from "./offers.js";
 import { btc } from "./chain.js";
-import { btcFeerates, qbitFeerates } from "./fees.js";
+import { btcFeerates, qbitFeerates, cachedBtcFeerates, cachedQbitFeerates } from "./fees.js";
 
 const json = (res, code, body) => { res.writeHead(code, { "content-type": "application/json" }); res.end(JSON.stringify(body)); };
 const MAX_BODY = 1 << 20;   // 1 MB — finish bundles (pre-signed txs) are the largest legit input, well under this
@@ -46,6 +46,10 @@ async function handle(req, res) {
   if (method === "OPTIONS") { res.writeHead(204); return res.end(); }
   try {
     if (method === "GET" && url.pathname === "/health") return json(res, 200, { ok: true, swaps: allSwaps().length });
+
+    // Public per-chain feerates (same cache the swap view uses) so the app can estimate the on-chain
+    // claim fee on the setup screen, before any swap exists. No secrets.
+    if (method === "GET" && url.pathname === "/feerates") return json(res, 200, { btc: cachedBtcFeerates(), qbit: cachedQbitFeerates() });
 
     // Public recent-trades feed (only successfully settled swaps; no per-party secrets).
     if (method === "GET" && url.pathname === "/trades") {
