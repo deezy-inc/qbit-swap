@@ -11,6 +11,7 @@ import { startServer } from "../../coordinator/server.js";
 import { startAdmin } from "../../coordinator/admin.js";
 import { startFaucet } from "./faucet.js";
 import { qbit, btc } from "../../coordinator/chain.js";
+import { MIN_SATS } from "../../coordinator/swap.js";   // single source of truth for the min swap value (env-driven)
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const PUBLIC_URL = (process.env.PUBLIC_URL || "http://127.0.0.1:8080").replace(/\/$/, "");
@@ -19,7 +20,7 @@ const MIME = { ".html": "text/html", ".js": "text/javascript", ".mjs": "text/jav
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // Same-origin config: the app talks to /coord and /faucet on its own origin (no CORS, no mixed content).
-const CONFIG = `<script>window.QBIT_COORDINATOR=${JSON.stringify(`${PUBLIC_URL}/coord`)};window.QBIT_TRIAL_FAUCET=${JSON.stringify(`${PUBLIC_URL}/faucet`)};window.QBIT_HRPS={"btc":"bcrt","qbit":"qbrt"};${process.env.FEE_BPS ? `window.QBIT_FEE_BPS=${Number(process.env.FEE_BPS) || 0};` : ""}</script>`;
+const CONFIG = `<script>window.QBIT_COORDINATOR=${JSON.stringify(`${PUBLIC_URL}/coord`)};window.QBIT_TRIAL_FAUCET=${JSON.stringify(`${PUBLIC_URL}/faucet`)};window.QBIT_HRPS={"btc":"bcrt","qbit":"qbrt"};window.QBIT_MIN_SATS=${JSON.stringify(MIN_SATS)};${process.env.FEE_BPS ? `window.QBIT_FEE_BPS=${Number(process.env.FEE_BPS) || 0};` : ""}</script>`;
 
 function proxy(req, res, port, path) {
   const up = http.request({ host: "127.0.0.1", port, method: req.method, path, headers: { ...req.headers, host: `127.0.0.1:${port}` } }, (r) => { res.writeHead(r.statusCode, r.headers); r.pipe(res); });

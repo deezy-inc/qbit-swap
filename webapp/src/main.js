@@ -41,6 +41,7 @@ const FAUCET = globalThis.QBIT_TRIAL_FAUCET || null;
 const ORDERBOOK = globalThis.QBIT_ORDERBOOK === true;   // feature flag, default OFF — peer-to-peer only
 const RECENT_TRADES = globalThis.QBIT_RECENT_TRADES === true;   // feature flag, default OFF — public recent-trades tab
 const FEE_BPS = Number(globalThis.QBIT_FEE_BPS || 0);   // >0 when the coordinator charges a platform fee (basis points)
+const MIN_SATS = globalThis.QBIT_MIN_SATS || null;   // min swap value per leg, injected from the coordinator's own config; null (not injected) → skip the up-front check and let the coordinator be the authority
 const appEl = document.getElementById("app");
 const vault = new Vault();
 let rerender = () => init();     // re-invoked on language change to redraw the current screen
@@ -54,8 +55,9 @@ window.addEventListener("beforeunload", (e) => { if (liveGuard.risky) { e.preven
 const DIR = { btc2qbt: { from: "BTC", to: "QBT" }, qbt2btc: { from: "QBT", to: "BTC" } };
 const dirForRole = (role) => (role === "bob" ? "qbt2btc" : "btc2qbt");
 const coinLeg = (coin) => (coin === "BTC" ? "btc" : "qbit");
-const sats = (n) => (n / 1e8).toLocaleString(undefined, { maximumFractionDigits: 8 });
-const toSats = (v) => Math.round(parseFloat(v) * 1e8);
+const sats = (n) => (n / 1e8).toLocaleString(undefined, { maximumFractionDigits: 8 });   // DISPLAY only (grouped) — never write this into an <input>: its thousands comma breaks parseFloat on re-read
+const amtStr = (n) => (n / 1e8).toFixed(8).replace(/0+$/, "").replace(/\.$/, "");         // plain, grouping-free — safe to round-trip through an input field
+const toSats = (v) => Math.round(parseFloat(String(v).replace(/,/g, "")) * 1e8);          // tolerate a stray grouping comma (en/zh use it as a thousands separator) so "4,441.4" isn't read as 4
 const DUST_UI = 546;
 // ── coordinator fee (optional) ────────────────────────────────────────────────
 // The platform fee for the current swap, in BTC sats (0 when off). Authoritative from the live view;
@@ -436,8 +438,8 @@ let priceMode = "usd";   // "usd" | "btc", persists across re-renders
 function stepAmount() {
   rerender = stepAmount;
   const { send, recv } = roleCoins();
-  const sendIn = field(t("amountPlaceholder", { coin: send }), coinSats(send) ? sats(coinSats(send)) : "");
-  const recvIn = field(t("amountPlaceholder", { coin: recv }), coinSats(recv) ? sats(coinSats(recv)) : "");
+  const sendIn = field(t("amountPlaceholder", { coin: send }), coinSats(send) ? amtStr(coinSats(send)) : "");
+  const recvIn = field(t("amountPlaceholder", { coin: recv }), coinSats(recv) ? amtStr(coinSats(recv)) : "");
   const btcIn = send === "BTC" ? sendIn : recvIn;   // which input holds BTC / QBT (direction-independent)
   const qbtIn = send === "BTC" ? recvIn : sendIn;
 
@@ -446,7 +448,7 @@ function stepAmount() {
   // (a standard 3-field calculator). A toggle switches the unit; BTCUSD is the cached CoinGecko rate.
   const unitKey = () => (priceMode === "usd" ? "priceUsd" : "priceBtc");
   const priceIn = field(t(unitKey()));
-  const num = (el) => { const n = parseFloat(el.value); return isFinite(n) && n > 0 ? n : 0; };
+  const num = (el) => { const n = parseFloat(el.value.replace(/,/g, "")); return isFinite(n) && n > 0 ? n : 0; };
   const trim = (n) => n.toFixed(8).replace(/0+$/, "").replace(/\.$/, "");
   let usd = 0;
   const bpqFromPrice = () => { const p = num(priceIn); return priceMode === "usd" ? (usd ? p / usd : 0) : p; };  // price field → BTC-per-QBT
@@ -469,10 +471,27 @@ function stepAmount() {
     priceMode = priceMode === "usd" ? "btc" : "usd"; unitBtn.textContent = t(unitKey()); priceIn.placeholder = t(unitKey());
     order = [...order.filter((x) => x !== "price"), "price"]; recompute();   // re-derive the shown price from the amounts in the new unit
   } }, t(unitKey()));
-  qbtIn.oninput = () => touch("qbt");
-  btcIn.oninput = () => touch("btc");
-  priceIn.oninput = () => touch("price");
-  btcUsdPrice().then((u) => { usd = u; recompute(); });
+  // Below-minimum guard: surface it immediately on the amount screen (not later, after addresses). Only
+  // once BOTH amounts are filled — no nagging mid-type — but then live on every keystroke. Flags the
+  // offending input(s) red, explains the minimum, and disables Continue. MIN_SATS comes from the
+  // coordinator's own config (injected), so this check and the server's stay in lockstep.
+  const errMsg = h("p", { class: "note", style: "color:var(--bad);font-weight:600;margin-top:10px;display:none" });
+  let ctaBtn = null;
+  function validate() {
+    const clear = () => { for (const el of [btcIn, qbtIn]) el.classList.remove("field-err", "flash"); errMsg.style.display = "none"; if (ctaBtn) ctaBtn.disabled = false; };
+    if (!MIN_SATS || btcIn.value.trim() === "" || qbtIn.value.trim() === "") return clear();   // wait for both fields
+    const btcLow = toSats(btcIn.value) < MIN_SATS.btc, qbtLow = toSats(qbtIn.value) < MIN_SATS.qbit;
+    if (!btcLow && !qbtLow) return clear();
+    btcIn.classList.toggle("field-err", btcLow); qbtIn.classList.toggle("field-err", qbtLow);
+    errMsg.textContent = t("amtTooSmall", { btc: sats(MIN_SATS.btc), qbt: sats(MIN_SATS.qbit) });
+    errMsg.style.display = "";
+    if (ctaBtn) ctaBtn.disabled = true;
+    for (const el of [btcLow && btcIn, qbtLow && qbtIn].filter(Boolean)) { el.classList.remove("flash"); void el.offsetWidth; el.classList.add("flash"); }   // re-trigger the flash
+  }
+  qbtIn.oninput = () => { touch("qbt"); validate(); };
+  btcIn.oninput = () => { touch("btc"); validate(); };
+  priceIn.oninput = () => { touch("price"); validate(); };
+  btcUsdPrice().then((u) => { usd = u; recompute(); validate(); });
   recompute();
 
   render(screen({
@@ -483,7 +502,9 @@ function stepAmount() {
       h("div", { style: "display:flex;align-items:center;gap:9px;margin:14px 0 5px" },
         h("span", { style: "font-size:12.5px;font-weight:550;color:var(--mut)" }, t("priceLabel")), unitBtn),
       priceIn,
-      (send === "BTC" && FEE_BPS > 0) ? h("p", { class: "note", style: "margin-top:12px" }, t("feeAdded", { pct: feePct() })) : null,
+      errMsg,
+      // Fee note, direction-aware: the BTC buyer pays the fee, so tell whichever side is looking who bears it.
+      (FEE_BPS > 0) ? h("p", { class: "note", style: "margin-top:12px" }, t(send === "BTC" ? "feeAdded" : "feeAddedCounterparty", { pct: feePct() })) : null,
     ],
     cta: t("continue"),
     onCta: () => {
@@ -493,6 +514,8 @@ function stepAmount() {
     },
     back: () => stepConfirm(),
   }));
+  ctaBtn = appEl.querySelector(".card > button.primary");   // the Continue button screen() built — gate it on validity
+  validate();
 }
 
 function stepReceive() {

@@ -92,7 +92,7 @@ export function sweepPresence() {
   }
 }
 
-const MIN_SATS = { btc: Number(process.env.MIN_BTC_SATS || 50000), qbit: Number(process.env.MIN_QBT_SATS || 200000) };   // above the largest claim/refund fee + dust
+export const MIN_SATS = { btc: Number(process.env.MIN_BTC_SATS || 50000), qbit: Number(process.env.MIN_QBT_SATS || 200000) };   // above the largest claim/refund fee + dust; the web app reads these (injected) so its up-front check matches this authority
 
 // Network hrp for the HTLC deposit addresses the coordinator hands out. MUST match the deploy network
 // (regtest bcrt/qbrt · testnet tb/tqb · mainnet bc/qb) or users get an unspendable address.
