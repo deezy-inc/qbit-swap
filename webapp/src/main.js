@@ -61,7 +61,7 @@ const dirForRole = (role) => (role === "bob" ? "qbt2btc" : "btc2qbt");
 const coinLeg = (coin) => (coin === "BTC" ? "btc" : "qbit");
 const sats = (n) => (n / 1e8).toLocaleString(undefined, { maximumFractionDigits: 8 });   // DISPLAY only (grouped) — never write this into an <input>: its thousands comma breaks parseFloat on re-read
 const amtStr = (n) => (n / 1e8).toFixed(8).replace(/0+$/, "").replace(/\.$/, "");         // plain, grouping-free — safe to round-trip through an input field
-const fmtHMS = (ms) => { const s = Math.max(0, Math.floor(ms / 1000)); return `${Math.floor(s / 3600)}:${String(Math.floor(s % 3600 / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`; };   // H:MM:SS countdown
+const fmtWhen = (ts) => { try { return new Date(ts).toLocaleString(getLang() === "zh" ? "zh-CN" : "en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }); } catch { return ""; } };
 // Swaps whose receive/refund addresses were TYPED in THIS browser (the create/join/take flow) — so it
 // already knows they're its own and the address-verification gate is skipped. A different browser/device
 // that only RESUMED the swap (permalink or imported backup) has no mark, so it still gets the gate. Stored
@@ -406,10 +406,15 @@ async function recoverCard(ids) {
   const active = [];
   for (const id of ids) { const s = await vault.load(id).catch(() => null); if (s && !s.done) active.push([id, s]); }   // hide finished swaps
   for (const [id, s] of active) {
-    const label = (s.qbtSats != null && s.btcSats != null)
+    // Lead with WHEN it was started (easiest to recognize), then the trade in smaller type below.
+    const amounts = (s.qbtSats != null && s.btcSats != null)
       ? t(s.role === "alice" ? "resumeBuy" : "resumeSell", { qbt: sats(s.qbtSats), btc: sats(s.btcSats) })
       : t("resumeBtn", { from: DIR[dirForRole(s.role)]?.from, to: DIR[dirForRole(s.role)]?.to, id: shorten(id, 6) });
-    card.append(h("button", { class: "primary", style: "width:100%;margin-top:8px", onclick: () => resumeSwap(s) }, label));
+    card.append(s.createdAt
+      ? h("button", { class: "primary resume-btn", style: "width:100%;margin-top:8px", onclick: () => resumeSwap(s) },
+          h("div", { class: "resume-when" }, t("resumeStarted", { when: fmtWhen(s.createdAt) })),
+          h("div", { class: "resume-amt" }, amounts))
+      : h("button", { class: "primary", style: "width:100%;margin-top:8px", onclick: () => resumeSwap(s) }, amounts));
   }
   const fileInput = h("input", { type: "file", accept: "application/json", style: "display:none", onchange: async (e) => { const f = e.target.files?.[0]; if (!f) return; try { resumeSwap(importBackup(await f.text())); } catch (err) { alert(t("errReadBackup", { msg: err.message })); } } });
   card.append(fileInput, h("div", { class: "btns", style: "margin-top:10px" }, h("button", { style: "font-size:12.5px; padding:7px 12px", onclick: () => fileInput.click() }, active.length ? t("uploadInstead") : t("uploadBackup"))));
@@ -818,7 +823,6 @@ function renderLive(card, v) {
   const canceled = v.state === "CANCELED";
   const terminal = v.state === "COMPLETE" || v.state === "REFUNDED" || canceled;
   const shorted = !terminal && !!v.shortFunded;   // a deposit came in below the agreed amount → swap dead (but the deposit is refundable)
-  clearInterval(flow._countdown);                 // recovery countdown — re-armed below only in the shorted state
 
   const headline = canceled ? t("swapCanceled")
     : v.state === "COMPLETE" ? t("swapComplete") : v.state === "REFUNDED" ? t("swapRefunded")
@@ -963,18 +967,17 @@ function renderLive(card, v) {
       if (r.available) {
         card.append(h("p", { class: "note", style: "margin-top:10px;font-weight:600;color:var(--good)" }, t("shortRefunding", { coin })));
       } else {
-        // Live HH:MM:SS counter to the estimated recovery time (server-clock anchored; re-estimated each
-        // chain update as blocks arrive), with the "come back with your recovery file" instruction.
-        const readyAt = () => (Date.now() + (flow._clockOffset || 0)) + Math.max(0, r.at - (v.heights?.[rl] || 0)) * (AVG_BLOCK[rl] || 600) * 1000;
-        const cd = h("span", { class: "mono", style: "font-weight:700;color:var(--ink)" }, fmtHMS(readyAt() - (Date.now() + (flow._clockOffset || 0))));
-        card.append(h("p", { class: "note", style: "margin-top:10px" }, t("shortRecoverIn", { coin }), " ", cd));
+        // Recovery is BLOCK-HEIGHT gated, so give a rough estimate (blocks remaining × the chain's block
+        // time) rather than a false-precision ticking countdown — the real time depends on when blocks land.
+        const blocks = Math.max(1, r.at - (v.heights?.[rl] || 0));
+        const mins = blocks * (AVG_BLOCK[rl] || 600) / 60;
+        const eta = mins < 90 ? `~${Math.round(mins / 5) * 5} min` : `~${Math.round(mins / 60 * 10) / 10} h`;
+        card.append(h("p", { class: "note", style: "margin-top:10px" }, t("shortRecoverIn", { coin, eta, blocks })));
         // If the watchtower already holds his signed refund, he's covered even if he closes the tab; if not,
         // he must come back with his recovery file.
         card.append(v.safetyNet?.self
           ? h("p", { class: "note", style: "margin-top:4px;color:var(--good)" }, t("shortRecoverArmed", { coin }))
           : h("p", { class: "note", style: "margin-top:4px" }, t("shortRecoverReturn")));
-        const target = readyAt();
-        flow._countdown = setInterval(() => { const rem = target - (Date.now() + (flow._clockOffset || 0)); cd.textContent = fmtHMS(rem); if (rem <= 0) clearInterval(flow._countdown); }, 1000);
       }
     }
     if (!mine) card.append(h("div", { class: "btns", style: "margin-top:14px" }, h("button", { class: "btn-ghost", style: "width:100%", onclick: () => goHome() }, t("startNewSwap"))));
@@ -1120,7 +1123,7 @@ function renderChrome() {
 
 // Clicking the Qbit logo clears the current flow and returns to the home screen.
 function goHome() {
-  flow.client?.stop?.(); stopJoinHeartbeat(); clearInterval(flow._countdown); clearInterval(flow._tick);
+  flow.client?.stop?.(); stopJoinHeartbeat(); clearInterval(flow._tick);
   Object.assign(flow, { mode: null, role: null, direction: null, btcSats: 0, qbtSats: 0, receiveAddr: "", refundAddr: "", client: null, inviteLink: null, fee: null, verified: false, _recoverySaved: false });
   liveGuard = { risky: false };
   if (location.hash) history.replaceState(null, "", location.pathname + location.search);

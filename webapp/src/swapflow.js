@@ -23,6 +23,7 @@ export class SwapClient {
     this.onUpdate = onUpdate;
     this.feeSats = feeSats;
     this.acted = new Set();
+    this.createdAt = Date.now();   // when this swap was started here (restored on resume; used in the recover list)
     // Direct-broadcast fallback endpoints for the coordinator-down path (see #send), keyed by network.
     // BOTH chains are openly relayable — this browser can push a signed tx straight to a public node on
     // either leg — so we keep a fallback for each. QBT is no more "coordinator-only" than BTC; swap safety
@@ -60,11 +61,13 @@ export class SwapClient {
       qbitPk: hex(this.qbit.pk), qbitSk: hex(this.qbit.sk), btcPriv: hex(this.btcPriv),
       secret: this.secret ? hex(this.secret) : null, H: this.H ? hex(this.H) : null,
       btcSats: this.terms?.btcSats ?? null, qbtSats: this.terms?.qbtSats ?? null,
+      createdAt: this.createdAt,
       recovery: this.recovery || null,   // pre-signed watchtower ladder (claim tiers + refund), for offline recovery
     };
   }
   restore(p) {
     this.id = p.swapId; this.role = p.role; this.direction = p.direction; this.token = p.token; this.base = p.coordinator.replace(/\/$/, "");
+    if (p.createdAt) this.createdAt = p.createdAt;
     this.btcDest = p.btcDest; this.qbitDest = p.qbitDest;
     this.qbit = { pk: bin(p.qbitPk), sk: bin(p.qbitSk) }; this.btcPriv = bin(p.btcPriv);
     this.secret = p.secret ? bin(p.secret) : null; this.H = p.H ? bin(p.H) : null;
