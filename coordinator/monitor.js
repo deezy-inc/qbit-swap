@@ -25,6 +25,7 @@ const now = Date.now();
 const short = (id) => (id || "").slice(0, 10);
 const fmtAmt = (s) => `${(s.btcSats || 0) / 1e8} BTC ⇄ ${(s.qbtSats || 0) / 1e8} QBT`;
 const mins = (ms) => Math.round(ms / 60000);
+const stEmoji = (st) => ({ CREATED: "🆕", READY: "🤝", FROM_FUNDED: "💰", TO_FUNDED: "💰", MATURING: "⏳", CLAIMABLE: "🔓", CLAIMED: "🔑", COMPLETE: "✅", REFUNDED: "↩️", CANCELED: "🚫", ABORTED: "⚠️" }[st] || "🔄");
 
 async function tg(text) {
   if (!TG_TOKEN || !TG_CHAT) { console.error("[no telegram]", text.replace(/<[^>]+>/g, "")); return; }
@@ -56,6 +57,7 @@ async function maybeAlert(state, i) {
 async function main() {
   const state = loadState();
   state.alerts ||= {}; state.heights ||= {}; state.heightsAt ||= {};
+  const firstRun = !state.swapStates; state.swapStates ||= {};   // first run records a baseline (no backlog flood)
 
   const issues = [];   // { key, sev, msg, grace? }
 
@@ -68,23 +70,48 @@ async function main() {
   }
   if (state.alerts["admin-unreachable"]) { await tg("✅ Coordinator admin API reachable again"); delete state.alerts["admin-unreachable"]; }
 
-  // Node connectivity + chain-height stall.
+  // Node connectivity (both legs) + chain-height stall (QBT only). Bitcoin routinely goes >20 min
+  // between blocks — that's expected variance, not a fault — so a height-stall alert on BTC is pure
+  // noise; we track its height but never page on the gap. QBT targets ~75s blocks, so a stall there
+  // is a genuine node problem worth an alert. Node-UNREACHABLE still alerts on both legs.
   for (const leg of ["btc", "qbit"]) {
     const c = ov.chains?.[leg];
     if (!c?.ok) { issues.push({ key: `node-down-${leg}`, sev: "CRITICAL", msg: `⛔ ${leg.toUpperCase()} node unreachable (${c?.backend}): ${c?.error || "no height"}` }); continue; }
     const prev = state.heights[leg], prevAt = state.heightsAt[leg] || now;
-    if (prev != null && c.height === prev && now - prevAt > STALL_MIN * 60000)
-      issues.push({ key: `stall-${leg}`, sev: "CRITICAL", msg: `⛔ ${leg.toUpperCase()} height stuck at ${c.height} for ${mins(now - prevAt)} min` });
+    if (leg === "qbit" && prev != null && c.height === prev && now - prevAt > STALL_MIN * 60000)
+      issues.push({ key: `stall-${leg}`, sev: "CRITICAL", msg: `⛔ QBT height stuck at ${c.height} for ${mins(now - prevAt)} min` });
     if (prev == null || c.height !== prev) { state.heights[leg] = c.height; state.heightsAt[leg] = now; }
+  }
+
+  const swaps = await api("/api/swaps");
+
+  // Ping on every swap STATE CHANGE — created, → funding, → claimable, → claimed, → complete, refunded, etc.
+  // The state file holds each swap's last-seen state across runs; the first run just records a baseline so we
+  // don't replay the whole backlog. Informational, so it's sent immediately (no grace / cooldown).
+  {
+    const live = new Set();
+    for (const s of swaps) {
+      live.add(s.id);
+      const prev = state.swapStates[s.id];
+      if (!firstRun && prev !== s.state)
+        await tg(prev === undefined
+          ? `${stEmoji(s.state)} New swap <code>${short(s.id)}</code> · ${fmtAmt(s)} · <b>${s.state}</b>`
+          : `${stEmoji(s.state)} Swap <code>${short(s.id)}</code> · ${fmtAmt(s)}: ${prev} → <b>${s.state}</b>`);
+      state.swapStates[s.id] = s.state;
+    }
+    for (const id of Object.keys(state.swapStates)) if (!live.has(id)) delete state.swapStates[id];   // forget pruned swaps
   }
 
   // Per-swap risk. riskOf() flags a funded leg past its timelock, an unprotected (offline, un-armed)
   // deposit, or a public preimage the participant hasn't claimed — the actual fund-loss conditions.
-  const swaps = await api("/api/swaps");
   for (const s of swaps) {
     for (const flag of (s.risk || []))
       issues.push({ key: `risk:${s.id}:${flag}`, sev: "CRITICAL", grace: true, msg: `⚠️ Swap <code>${short(s.id)}</code> (${fmtAmt(s)}): ${flag}` });
-    if (s.short)
+    // Underfunded deposit — but only while it's still there. A refund spends the short UTXO
+    // (shortFunded[leg].spent → true) and moves the swap to REFUNDED; once that happens this drops out
+    // of the issue set and the resolve pass announces it cleared, so a refunded short stops pinging.
+    const shortOpen = s.short && Object.values(s.short).some((sf) => sf && !sf.spent) && !["REFUNDED", "ABORTED", "CANCELED", "COMPLETE"].includes(s.state);
+    if (shortOpen)
       issues.push({ key: `short:${s.id}`, sev: "WARN", msg: `⚠️ Swap <code>${short(s.id)}</code> underfunded: got ${JSON.stringify(s.short)}` });
     const active = !["COMPLETE", "REFUNDED", "ABORTED", "CANCELED", "CREATED"].includes(s.state);
     if (active && (s.funded?.btc || s.funded?.qbit) && s.createdAt && now - s.createdAt > STUCK_HOURS * 3600000)
