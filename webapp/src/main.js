@@ -61,6 +61,7 @@ const dirForRole = (role) => (role === "bob" ? "qbt2btc" : "btc2qbt");
 const coinLeg = (coin) => (coin === "BTC" ? "btc" : "qbit");
 const sats = (n) => (n / 1e8).toLocaleString(undefined, { maximumFractionDigits: 8 });   // DISPLAY only (grouped) — never write this into an <input>: its thousands comma breaks parseFloat on re-read
 const amtStr = (n) => (n / 1e8).toFixed(8).replace(/0+$/, "").replace(/\.$/, "");         // plain, grouping-free — safe to round-trip through an input field
+const fmtHMS = (ms) => { const s = Math.max(0, Math.floor(ms / 1000)); return `${Math.floor(s / 3600)}:${String(Math.floor(s % 3600 / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`; };   // H:MM:SS countdown
 const toSats = (v) => Math.round(parseFloat(String(v).replace(/,/g, "")) * 1e8);          // tolerate a stray grouping comma (en/zh use it as a thousands separator) so "4,441.4" isn't read as 4
 const DUST_UI = 546;
 // ── coordinator fee (optional) ────────────────────────────────────────────────
@@ -806,16 +807,19 @@ function renderLive(card, v) {
   const addr = v.htlc?.[fundLeg]?.address;
   const canceled = v.state === "CANCELED";
   const terminal = v.state === "COMPLETE" || v.state === "REFUNDED" || canceled;
+  const shorted = !terminal && !!v.shortFunded;   // a deposit came in below the agreed amount → swap dead (but the deposit is refundable)
+  clearInterval(flow._countdown);                 // recovery countdown — re-armed below only in the shorted state
 
   const headline = canceled ? t("swapCanceled")
     : v.state === "COMPLETE" ? t("swapComplete") : v.state === "REFUNDED" ? t("swapRefunded")
+    : shorted ? t("underfundTitle")
     : !addr ? t("waitingCounterparty")
     : funded ? t(funded.unconfirmed ? "coinPending" : "coinLocked", { coin: send })
     : (v.fundGate && !v.fundGate.cleared) ? t("awaitingBtc")   // seller: sequenced funding holds them until BTC is sent — don't tell them to send yet
     : t("sendToLock", { coin: send });
   card.append(h("div", { style: "display:flex;justify-content:space-between;align-items:center" },
     h("h2", { style: "margin:0" }, headline),
-    h("span", { class: "badge " + (STATE_CLASS[v.state] || "") }, v.state)));
+    h("span", { class: "badge " + (shorted ? "bad" : STATE_CLASS[v.state] || "") }, shorted ? t("badgeCanceled") : v.state)));
 
   // Swap called off before anyone funded — show who cancelled and stop.
   if (canceled) {
@@ -863,7 +867,6 @@ function renderLive(card, v) {
   // It renders INLINE on the active timeline step below — not as a banner above the timeline — so the page
   // reads top-to-bottom and the action sits on the step we're actually on. It's null once there's nothing
   // to do (our own deposit is buried, or we're only waiting on the counterparty — the timeline says so).
-  const shorted = !terminal && !!v.shortFunded;   // a deposit came in below the agreed amount → swap paused
   let action = null;
   if (!terminal && addr && expired) {
     // The funding window elapsed — the timelocks were fixed at setup, so funding this late is no longer
@@ -938,19 +941,29 @@ function renderLive(card, v) {
   }
   if (shorted) {
     const legs = Object.keys(v.shortFunded);
-    card.append(h("p", { class: "note", style: "color:var(--bad);font-weight:600;margin-top:12px" },
-      t("underfundWarn"),
-      ...legs.map((leg) => v.shortFunded[leg]?.txid
-        ? h("span", {}, " ", h("a", { href: EXPLORER[leg] + v.shortFunded[leg].txid, target: "_blank", rel: "noopener", style: "color:var(--accent);white-space:nowrap" }, t("viewDeposit"))) : null)));
-    // Recovery: the underfunded deposit is a real HTLC UTXO — refundable by its funder after the timelock,
-    // which the app does automatically. Reassure that the funds aren't lost and give a rough ETA.
     const rl = legs.find((leg) => v.refund?.[leg]?.short), r = rl ? v.refund[rl] : null;
-    if (r) {
+    const mine = rl === fundLeg;   // the underfunded deposit is on MY funding leg → I'm the one who recovers it
+    // The swap is dead for both sides. Say so plainly, then split: the underfunder gets a recovery counter,
+    // the counterparty (nothing locked) just gets a "safe to leave".
+    card.append(h("p", { class: "note", style: "color:var(--bad);font-weight:600;margin-top:12px" },
+      mine ? t("underfundMine") : t("underfundCp"),
+      mine ? ["  ", ...legs.map((leg) => v.shortFunded[leg]?.txid ? h("a", { href: EXPLORER[leg] + v.shortFunded[leg].txid, target: "_blank", rel: "noopener", style: "color:var(--accent);white-space:nowrap" }, t("viewDeposit")) : null)] : null));
+    if (mine && r) {
       const coin = rl === "btc" ? "BTC" : "QBT";
-      const secs = Math.max(0, r.at - (v.heights?.[rl] || 0)) * (AVG_BLOCK[rl] || 600);
-      const eta = secs < 3600 ? `~${Math.round(secs / 60)} min` : `~${Math.round(secs / 3600 * 10) / 10} h`;
-      card.append(h("p", { class: "note", style: "margin-top:8px" }, r.available ? t("shortRefunding", { coin }) : t("shortRefundWait", { coin, eta })));
+      if (r.available) {
+        card.append(h("p", { class: "note", style: "margin-top:10px;font-weight:600;color:var(--good)" }, t("shortRefunding", { coin })));
+      } else {
+        // Live HH:MM:SS counter to the estimated recovery time (server-clock anchored; re-estimated each
+        // chain update as blocks arrive), with the "come back with your recovery file" instruction.
+        const readyAt = () => (Date.now() + (flow._clockOffset || 0)) + Math.max(0, r.at - (v.heights?.[rl] || 0)) * (AVG_BLOCK[rl] || 600) * 1000;
+        const cd = h("span", { class: "mono", style: "font-weight:700;color:var(--ink)" }, fmtHMS(readyAt() - (Date.now() + (flow._clockOffset || 0))));
+        card.append(h("p", { class: "note", style: "margin-top:10px" }, t("shortRecoverIn", { coin }), " ", cd));
+        card.append(h("p", { class: "note", style: "margin-top:4px" }, t("shortRecoverReturn")));
+        const target = readyAt();
+        flow._countdown = setInterval(() => { const rem = target - (Date.now() + (flow._clockOffset || 0)); cd.textContent = fmtHMS(rem); if (rem <= 0) clearInterval(flow._countdown); }, 1000);
+      }
     }
+    if (!mine) card.append(h("div", { class: "btns", style: "margin-top:14px" }, h("button", { class: "btn-ghost", style: "width:100%", onclick: () => goHome() }, t("startNewSwap"))));
   }
   if (v.actionError) card.append(h("p", { class: "note", style: "color:var(--bad)" }, "⚠ " + v.actionError));
   // Cancel only when NOTHING is on-chain (unfunded) — it clears a stale swap and the counterparty sees it.
@@ -1067,7 +1080,7 @@ function renderChrome() {
 
 // Clicking the Qbit logo clears the current flow and returns to the home screen.
 function goHome() {
-  flow.client?.stop?.(); stopJoinHeartbeat();
+  flow.client?.stop?.(); stopJoinHeartbeat(); clearInterval(flow._countdown); clearInterval(flow._tick);
   Object.assign(flow, { mode: null, role: null, direction: null, btcSats: 0, qbtSats: 0, receiveAddr: "", refundAddr: "", client: null, inviteLink: null, fee: null, verified: false, _recoverySaved: false });
   liveGuard = { risky: false };
   if (location.hash) history.replaceState(null, "", location.pathname + location.search);
