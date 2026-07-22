@@ -118,12 +118,20 @@ async function main() {
       issues.push({ key: `stuck:${s.id}`, sev: "WARN", msg: `⚠️ Swap <code>${short(s.id)}</code> funded but ${s.state} for ${Math.round((now - s.createdAt) / 3600000)}h` });
   }
 
-  // Fire new/re-due issues; announce ones that have cleared.
+  // Fire new/re-due issues; announce ones that have cleared. Recovery pings mirror the alert that fired:
+  // a node/chain coming back gets an explicit "reachable/advancing again (height N)" — not a terse key —
+  // so the all-clear is as legible as the alarm was.
   const seen = new Set(issues.map((i) => i.key));
   for (const i of issues) await maybeAlert(state, i);
   for (const key of Object.keys(state.alerts)) {
     if (key === "admin-unreachable" || key === "_heartbeat") continue;
-    if (!seen.has(key)) { await tg(`✅ Resolved: <code>${key}</code>`); delete state.alerts[key]; }
+    if (seen.has(key)) continue;
+    const h = (leg) => { const n = ov.chains?.[leg]?.height; return n != null ? ` (height ${n})` : ""; };
+    let msg;
+    if (key.startsWith("node-down-")) { const leg = key.slice(10); msg = `✅ ${leg.toUpperCase()} node reachable again${h(leg)}`; }
+    else if (key.startsWith("stall-")) { const leg = key.slice(6); msg = `✅ ${leg.toUpperCase()} chain advancing again${h(leg)}`; }
+    else msg = `✅ Resolved: <code>${key}</code>`;
+    await tg(msg); delete state.alerts[key];
   }
 
   // Optional periodic "all clear" so silence-because-broken is distinguishable from silence-because-fine.
