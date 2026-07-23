@@ -8,13 +8,13 @@
 //   otherwise      → JSON snapshot, written atomically (temp+rename). Simple, but rewrites the whole file
 //                     on every change — fine at low volume, the reason the .db backend exists.
 import { readFileSync, writeFileSync, renameSync, existsSync } from "node:fs";
-import { DatabaseSync } from "node:sqlite";
+import { createRequire } from "node:module";
 
 const strip = ({ _sig, _online, presence, ...s }) => s;   // drop ephemeral fields before persisting
 
 export function makeStore(path, getAll) {
   if (!path) return { backend: "memory", load: () => [], put: () => {} };
-  if (/\.(db|sqlite)$/i.test(path)) return sqliteStore(path);
+  if (/\.(db|sqlite)$/i.test(path)) return sqliteStore(path, getAll);
   return jsonStore(path, getAll);
 }
 
@@ -27,10 +27,21 @@ function jsonStore(path, getAll) {
   };
 }
 
-function sqliteStore(path) {
+function sqliteStore(path, getAll) {
   // Swallow node:sqlite's one-time "experimental" ExperimentalWarning (keep the log clean); pass the rest.
   const emit = process.emitWarning.bind(process);
   process.emitWarning = (w, ...r) => (String(w).includes("SQLite is an experimental") ? undefined : emit(w, ...r));
+  // Load node:sqlite LAZILY (only when a .db path is actually configured) so importing this module never
+  // crashes on a Node without it. Node < 22.5 has no node:sqlite → fall back to the JSON snapshot at the
+  // sibling .json path (keeps the coordinator up and persisting) with a loud note to upgrade Node.
+  let DatabaseSync;
+  try { ({ DatabaseSync } = createRequire(import.meta.url)("node:sqlite")); } catch { /* older Node */ }
+  if (!DatabaseSync) {
+    process.emitWarning = emit;
+    const legacy = path.replace(/\.(db|sqlite)$/i, ".json");
+    console.error(`[store] node:sqlite unavailable (needs Node 22.5+; running ${process.version}) — persisting to JSON at ${legacy} instead. Upgrade Node to enable the sqlite backend.`);
+    return jsonStore(legacy, getAll);
+  }
   const db = new DatabaseSync(path);
   process.emitWarning = emit;
   db.exec("PRAGMA journal_mode=WAL");        // concurrent readers (query it live from elsewhere) + crash-safe
