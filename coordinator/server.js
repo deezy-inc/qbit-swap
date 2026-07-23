@@ -4,7 +4,7 @@
 import http from "node:http";
 import { createSwap, getSwap, roleOf, submitParty, broadcast, view, poll, allSwaps, subscribe, markSeen, addConnection, dropConnection, sweepPresence, submitFinish, driveWatchtower, cancelSwap } from "./swap.js";
 import { createOffer, getOffer, isMaker, book, takeOffer, cancelOffer, makerView } from "./offers.js";
-import { rfqEnabled, makerByKey, submitQuote, pendingMatches, depth, bestQuote, publicQuote, takeRfq, RFQ_TTL_MS } from "./rfq.js";
+import { rfqEnabled, makerByKey, submitQuote, pendingMatches, depth, bestQuote, publicQuote, takeRfq, planFill, publicPlan, takeFill, RFQ_TTL_MS } from "./rfq.js";
 import { btc } from "./chain.js";
 import { btcFeerates, qbitFeerates, cachedBtcFeerates, cachedQbitFeerates } from "./fees.js";
 
@@ -86,6 +86,16 @@ async function handle(req, res) {
       }
       if (method === "POST" && parts[1] === "take") {
         try { return json(res, 201, takeRfq(await readBody(req))); }
+        catch (e) { return json(res, 409, { error: String(e.message || e), quote: e.quote ?? undefined, available: e.available ?? undefined }); }
+      }
+      // Multi-maker: a size that no single maker covers, filled across several (best price first) as one
+      // order of independent swaps. /rfq/plan quotes it (VWAP + per-leg breakdown); /rfq/order takes it.
+      if (method === "GET" && parts[1] === "plan") {
+        try { return json(res, 200, publicPlan(planFill(url.searchParams.get("side"), { btcSats: Number(url.searchParams.get("btcSats")) || 0, qbtSats: Number(url.searchParams.get("qbtSats")) || 0 }))); }
+        catch (e) { return json(res, 409, { error: String(e.message || e) }); }
+      }
+      if (method === "POST" && parts[1] === "order") {
+        try { return json(res, 201, takeFill(await readBody(req))); }
         catch (e) { return json(res, 409, { error: String(e.message || e), quote: e.quote ?? undefined, available: e.available ?? undefined }); }
       }
       if (method === "POST" && parts[1] === "maker") {

@@ -11,7 +11,7 @@
 //
 // Roles follow the engine's fixed rule (QBT buyer = alice/initiator): retail buy → taker=alice,
 // maker=bob; retail sell → maker=alice, taker=bob.
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { createSwap, getSwap, MIN_SATS, feeTotalOn, takerNetOfGross } from "./swap.js";
 
 export const RFQ_TTL_MS = Number(process.env.RFQ_TTL_MS || 30000);          // quote lifetime per ping
@@ -186,26 +186,83 @@ export function bestQuote(side, amounts) {
 }
 export const publicQuote = ({ _maker, ...q }) => q;
 
+// Open ONE swap against one maker for a sized leg { price, btcSats, qbtSats }: create the swap,
+// decrement the maker's remaining size, queue its match (delivered on its next ping) and log it for
+// reputation. `orderId` tags legs of the same multi-maker fill so they can be tracked as one order.
+function openLeg(m, side, leg, orderId) {
+  const takerRole = side === "buy" ? "alice" : "bob";      // QBT buyer is always the initiator
+  const makerRole = takerRole === "alice" ? "bob" : "alice";
+  const swap = createSwap({ btcSats: leg.btcSats, qbtSats: leg.qbtSats, securityLevel: "high" });
+  if (orderId) swap.orderId = orderId;
+  m.quote[sideKey(side)].qbtSats = Math.max(0, m.quote[sideKey(side)].qbtSats - leg.qbtSats);
+  const match = { swapId: swap.id, token: swap.tokens[makerRole], role: makerRole, side: sideKey(side), price: leg.price, btcSats: leg.btcSats, qbtSats: leg.qbtSats, at: now() };
+  m.matches.push(match);
+  m.history.push({ swapId: swap.id, role: makerRole, at: match.at });   // append-only reputation log (matches[] gets pruned; this doesn't)
+  if (m.history.length > REP_HISTORY) m.history.shift();
+  return { swapId: swap.id, token: swap.tokens[takerRole], role: takerRole, terms: swap.terms, price: leg.price };
+}
+
 // Take: re-price at the CURRENT best and fill only if it's no worse than the price the retail user was
 // shown (limit semantics — a better price is fine, a worse one is a "price moved" reject so the UI can
-// re-quote). Creates the swap, queues the match for the maker's next ping, and decrements the maker's
-// remaining size so a second take can't consume liquidity the maker no longer has.
+// re-quote). Single-maker (one swap). See takeFill for the multi-maker version.
 export function takeRfq({ side, btcSats, qbtSats, price }) {
   const lim = Number(price);
   if (!(lim > 0)) throw new Error("price (the quoted price you accepted) is required");
   const q = bestQuote(side, { btcSats: Number(btcSats) || 0, qbtSats: Number(qbtSats) || 0 });
   const worse = side === "buy" ? q.price > lim * (1 + 1e-9) : q.price < lim * (1 - 1e-9);
   if (worse) { const e = new Error("price moved — refresh the quote"); e.quote = publicQuote(q); throw e; }
-  const m = q._maker;
-  const takerRole = side === "buy" ? "alice" : "bob";      // QBT buyer is always the initiator
-  const makerRole = takerRole === "alice" ? "bob" : "alice";
-  const swap = createSwap({ btcSats: q.btcSats, qbtSats: q.qbtSats, securityLevel: "high" });
-  m.quote[sideKey(side)].qbtSats = Math.max(0, m.quote[sideKey(side)].qbtSats - q.qbtSats);
-  const match = { swapId: swap.id, token: swap.tokens[makerRole], role: makerRole, side: sideKey(side), price: q.price, btcSats: q.btcSats, qbtSats: q.qbtSats, at: now() };
-  m.matches.push(match);
-  m.history.push({ swapId: swap.id, role: makerRole, at: match.at });   // append-only reputation log (matches[] gets pruned; this doesn't)
-  if (m.history.length > REP_HISTORY) m.history.shift();
-  return { swapId: swap.id, token: swap.tokens[takerRole], role: takerRole, terms: swap.terms, price: q.price };
+  return openLeg(q._maker, side, { price: q.price, btcSats: q.btcSats, qbtSats: q.qbtSats });
+}
+
+// ── multi-maker routing ──────────────────────────────────────────────────────────────────────────
+// Fill a size that no single maker covers by walking the book best-price-first and taking a slice from
+// each until the request is met (or liquidity runs out → a partial plan). Suspended/expired makers are
+// already excluded (liveSides). Each slice is sized in the maker's favor; a remainder too small to be
+// its own swap (below MIN_SATS) is dropped rather than made into a dust swap. Returns the aggregate
+// (VWAP price + totals) plus the per-leg breakdown. Nothing is created — this is the quote.
+export function planFill(side, amounts) {
+  if (side !== "buy" && side !== "sell") throw new Error('side must be "buy" or "sell"');
+  const wantQbt = Math.floor(Number(amounts.qbtSats) || 0);
+  const wantBtc = Math.floor(Number(amounts.btcSats) || 0);
+  if (!(wantQbt > 0) && !(wantBtc > 0)) throw new Error("btcSats or qbtSats required");
+  const ranked = liveSides(side).sort((a, b) => (side === "buy" ? a.q.price - b.q.price : b.q.price - a.q.price));   // best price first
+  const legs = [];
+  let gotQbt = 0, gotBtc = 0;
+  for (const { m, q } of ranked) {
+    if ((wantQbt && gotQbt >= wantQbt) || (wantBtc && gotBtc >= wantBtc)) break;
+    let legQbt = q.qbtSats;                                                   // this maker's remaining size
+    if (wantQbt) legQbt = Math.min(legQbt, wantQbt - gotQbt);
+    if (wantBtc) legQbt = Math.min(legQbt, side === "buy" ? Math.floor((wantBtc - gotBtc) / q.price) : Math.ceil((wantBtc - gotBtc) / q.price));
+    if (legQbt <= 0) continue;
+    const d = derive(side, q.price, { qbtSats: legQbt });
+    if (d.qbtSats < MIN_SATS.qbit || d.btcSats < MIN_SATS.btc) continue;      // sub-min remainder can't be its own swap
+    legs.push({ m, price: q.price, qbtSats: d.qbtSats, btcSats: d.btcSats });
+    gotQbt += d.qbtSats; gotBtc += d.btcSats;
+  }
+  return {
+    side, legs, qbtSats: gotQbt, btcSats: gotBtc,
+    price: gotQbt ? gotBtc / gotQbt : null,                                   // volume-weighted average, BTC per QBT
+    requested: { qbtSats: wantQbt || null, btcSats: wantBtc || null },
+    complete: wantQbt ? gotQbt >= wantQbt : gotBtc >= wantBtc,                // false = liquidity ran out (partial)
+    makers: legs.length, ttlMs: RFQ_TTL_MS,
+  };
+}
+export const publicPlan = (p) => ({ ...p, legs: p.legs.map(({ m, ...leg }) => leg) });   // strip maker identity
+
+// Take a multi-maker fill: re-plan now, gate on the AGGREGATE (VWAP) limit price, then open one swap per
+// leg under a shared orderId. Returns the order — one { swapId, token, role, terms } the taker drives per
+// leg (independent swaps: any leg can complete or refund on its own → a partial fill is possible and
+// reported via `complete`/totals). Each leg's maker learns of its match on its next ping.
+export function takeFill({ side, btcSats, qbtSats, price }) {
+  const lim = Number(price);
+  if (!(lim > 0)) throw new Error("price (the quoted VWAP you accepted) is required");
+  const plan = planFill(side, { btcSats: Number(btcSats) || 0, qbtSats: Number(qbtSats) || 0 });
+  if (!plan.legs.length) { const d = depth()[side]; const e = new Error(d.qbtSats > 0 ? "not enough liquidity for this size" : "no liquidity right now"); e.available = d.qbtSats; throw e; }
+  const worse = side === "buy" ? plan.price > lim * (1 + 1e-9) : plan.price < lim * (1 - 1e-9);
+  if (worse) { const e = new Error("price moved — refresh the quote"); e.quote = publicPlan(plan); throw e; }
+  const orderId = randomBytes(16).toString("hex");
+  const legs = plan.legs.map((leg) => openLeg(leg.m, side, leg, orderId));
+  return { orderId, side, price: plan.price, qbtSats: plan.qbtSats, btcSats: plan.btcSats, requested: plan.requested, complete: plan.complete, legs };
 }
 
 // Admin/monitoring projection — quote ages + pending-match counts per maker; never the key (only its

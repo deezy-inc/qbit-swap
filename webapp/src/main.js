@@ -1264,7 +1264,7 @@ window.addEventListener("drop", async (e) => {
 const API_AUTH = { "": ["apiAuthPublic", ""], tok: ["apiAuthToken", "tok"], mtok: ["apiAuthMakerTok", "tok"], key: ["apiAuthMakerKey", "key"] };
 const API_GROUPS = [
   { head: "apiSecPublic", eps: [["GET", "/health", "apiHealth"], ["GET", "/feerates", "apiFeerates"], ["GET", "/trades", "apiTrades"]] },
-  { head: "apiSecRfq", eps: [["GET", "/rfq", "apiRfqDepth"], ["GET", "/rfq/quote", "apiRfqQuote"], ["POST", "/rfq/take", "apiRfqTake"], ["POST", "/rfq/maker", "apiRfqMaker", "key"]] },
+  { head: "apiSecRfq", eps: [["GET", "/rfq", "apiRfqDepth"], ["GET", "/rfq/quote", "apiRfqQuote"], ["POST", "/rfq/take", "apiRfqTake"], ["GET", "/rfq/plan", "apiRfqPlan"], ["POST", "/rfq/order", "apiRfqOrder"], ["POST", "/rfq/maker", "apiRfqMaker", "key"]] },
   { head: "apiSecBook", eps: [["GET", "/offers", "apiBook"], ["POST", "/offers", "apiPostOffer"], ["POST", "/offers/:id/take", "apiTake"], ["GET", "/offers/:id", "apiMakerView", "mtok"], ["POST", "/offers/:id/cancel", "apiCancelOffer", "mtok"]] },
   { head: "apiSecSwap", eps: [["POST", "/swaps", "apiCreateSwap"], ["GET", "/swaps/:id", "apiView", "tok"], ["GET", "/swaps/:id/events", "apiEvents", "tok"], ["POST", "/swaps/:id/party", "apiParty", "tok"], ["POST", "/swaps/:id/broadcast", "apiBroadcast", "tok"], ["POST", "/swaps/:id/finish", "apiFinish", "tok"], ["POST", "/swaps/:id/cancel", "apiCancelSwap", "tok"], ["GET", "/swaps/:id/beat", "apiBeat", "tok"]] },
 ];

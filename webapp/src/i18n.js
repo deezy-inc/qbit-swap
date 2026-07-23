@@ -75,6 +75,8 @@ const en = {
   apiRfqDepth: "Live market-maker liquidity: best price and total size per side. enabled=false when no makers are configured.",
   apiRfqQuote: "Best-price quote for a size: ?side=buy|sell&btcSats=|qbtSats=. 409 when live liquidity can't cover it.",
   apiRfqTake: "Accept a quote { side, btcSats|qbtSats, price } — limit semantics: fills at your price or better, otherwise 409 \"price moved\" with a fresh quote. Returns { swapId, token, role, terms }.",
+  apiRfqPlan: "Plan a size across MULTIPLE makers (best price first) when no single one covers it: ?side&btcSats|qbtSats. Returns the volume-weighted price + per-leg breakdown; a thin book yields a partial (complete=false).",
+  apiRfqOrder: "Take a multi-maker plan { side, btcSats|qbtSats, price } — gated on the aggregate (VWAP) limit. Opens one swap per leg under a shared orderId; returns { orderId, legs:[{ swapId, token, role, terms }] } (independent swaps — a partial fill is possible).",
   apiRfqMaker: "Market-maker ping (X-Maker-Key header): (re)state your { bid?, ask? } — price in BTC per QBT, size in qbtSats — and receive your pending matches. Quotes expire unless re-pinged.",
   // instant swap (RFQ) widget
   instTitle: "Instant swap",
@@ -352,6 +354,8 @@ const zh = {
   apiRfqDepth: "做市商实时流动性：每侧的最优价与总量。未配置做市商时 enabled=false。",
   apiRfqQuote: "按数量获取最优报价：?side=buy|sell&btcSats=|qbtSats=。实时流动性不足时返回 409。",
   apiRfqTake: "接受报价 { side, btcSats|qbtSats, price }——限价语义：以您的价格或更优成交，否则返回 409「价格已变动」并附新报价。返回 { swapId, token, role, terms }。",
+  apiRfqPlan: "当单个做市商无法满足时，跨多个做市商（按最优价优先）规划一笔数量：?side&btcSats|qbtSats。返回成交量加权价格与逐笔明细；订单簿深度不足时返回部分成交（complete=false）。",
+  apiRfqOrder: "接受多做市商方案 { side, btcSats|qbtSats, price }——按聚合（VWAP）限价校验。在同一 orderId 下为每一笔腿各开一个 swap；返回 { orderId, legs:[{ swapId, token, role, terms }] }（各 swap 相互独立——可能出现部分成交）。",
   apiRfqMaker: "做市商心跳（X-Maker-Key 请求头）：（重新）声明您的 { bid?, ask? }——价格为 BTC/QBT，数量为 qbtSats——并接收待处理的成交。不持续心跳则报价过期。",
   // instant swap (RFQ) widget
   instTitle: "即时兑换",

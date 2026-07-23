@@ -77,6 +77,13 @@ RFQ 报价必须持续心跳维持：机器人一旦静默，其流动性将在 
 - `POST /rfq/take` `{ side, btcSats|qbtSats, price }` — 限价语义：以 `price` 或更优成交，否则返回
   `409`「价格已变动」并附新报价。创建 swap → `{ swapId, token, role, terms }`（散户买入 → 吃单方 =
   alice/发起方；散户卖出 → 吃单方 = bob，由做市方发起）。
+- `GET  /rfq/plan?side&btcSats|qbtSats` — **多做市商**路由：当单个做市商无法满足某数量时，按最优价优先
+  遍历订单簿进行拆单。返回成交量加权 `price` 与逐笔明细；深度不足时返回部分成交（`complete:false`）。
+  低于最小值的余量将被丢弃，而非生成粉尘 swap。
+- `POST /rfq/order` `{ side, btcSats|qbtSats, price }` — 接受方案，按聚合（VWAP）限价校验。在同一
+  `orderId` 下为每一笔腿各开一个 swap → `{ orderId, price, qbtSats, btcSats, legs:[{ swapId, token,
+  role, terms }] }`。各腿为**相互独立**的 swap（各自完成或退款，因此可能出现部分成交）；吃单方像处理
+  任意 `/rfq/take` swap 一样分别驱动每一笔腿。
 
 RFQ 手续费由**吃单方承担**（点对点链接兑换保持买方承担的加收结构）：买入本来就由吃单方支付（其为
 BTC 发送方，充值 `terms + fee`）；卖出则将吃单方的 BTC 所得按净额报价（`takerNetOfGross`），因此

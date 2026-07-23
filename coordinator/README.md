@@ -80,6 +80,13 @@ QBT; sizes are `qbtSats`; `bid` = maker buys QBT (retail sells into it), `ask` =
 - `POST /rfq/take` `{ side, btcSats|qbtSats, price }` — limit semantics: fills at `price` or better,
   else `409` "price moved" with a fresh quote. Creates the swap → `{ swapId, token, role, terms }`
   (retail buy → taker = alice/initiator; retail sell → taker = bob, the maker initiates).
+- `GET  /rfq/plan?side&btcSats|qbtSats` — **multi-maker** routing: fills a size no single maker covers by
+  walking the book best-price-first. Returns the volume-weighted `price` + per-leg breakdown; a thin book
+  yields a partial (`complete:false`). Sub-min remainders are dropped, not made into dust swaps.
+- `POST /rfq/order` `{ side, btcSats|qbtSats, price }` — take a plan, gated on the aggregate (VWAP) limit.
+  Opens one swap per leg under a shared `orderId` → `{ orderId, price, qbtSats, btcSats, legs:[{ swapId,
+  token, role, terms }] }`. The legs are **independent** swaps (each completes or refunds on its own, so a
+  partial fill is possible); the taker drives each leg like any `/rfq/take` swap.
 
 Fees are **taker-pays** on RFQ (peer link swaps keep the buyer-pays gross-up): a buy already charges
 the taker (they're the BTC sender, funding `terms + fee`); a sell quotes the taker's BTC proceeds NET
