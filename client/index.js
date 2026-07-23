@@ -25,3 +25,4 @@ export {
   compressedPub, ecdsaSign, htlcWitnessScript, p2wshSpk, p2wshAddr,
   bip143Sighash, serializeSegwit, btcSpend,
 } from "./bitcoin.js";
+export { splitterScript, splitterAddress, splitFunding } from "./fanout.js";
