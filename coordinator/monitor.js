@@ -10,6 +10,7 @@
 // Env: ADMIN_URL (default http://127.0.0.1:8790) · ADMIN_TOKEN · TELEGRAM_BOT_TOKEN · TELEGRAM_CHAT_ID ·
 //      MONITOR_STATE (state file) · GRACE_MIN · STALL_MIN · STUCK_HOURS · RE_ALERT_MIN · HEARTBEAT_HOURS
 import { readFileSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 
 const ADMIN = (process.env.ADMIN_URL || "http://127.0.0.1:8790").replace(/\/$/, "");
 const TOKEN = process.env.ADMIN_TOKEN || "";
@@ -20,12 +21,31 @@ const STALL_MIN = Number(process.env.STALL_MIN || 20);        // a chain height 
 const STUCK_HOURS = Number(process.env.STUCK_HOURS || 6);     // active + funded, this old, still not settled
 const RE_ALERT_MIN = Number(process.env.RE_ALERT_MIN || 30);  // re-page a still-active issue this often
 const HEARTBEAT_HOURS = Number(process.env.HEARTBEAT_HOURS || 24);  // periodic "all clear" (0 = off)
+// Disk-usage alerts across the fleet. This monitor runs on swap-server; it reads its OWN disk locally and
+// the two nodes' disk over SSH with a dedicated key that's FORCED to only run `df -P /` (no shell). Hosts
+// as name:host (empty host = local). WARN then CRITICAL thresholds; both page (and clear) via the same
+// grace/cooldown/recovery path as everything else.
+const DISK_WARN_PCT = Number(process.env.DISK_WARN_PCT || 85);
+const DISK_CRIT_PCT = Number(process.env.DISK_CRIT_PCT || 92);
+const MONITOR_SSH_KEY = process.env.MONITOR_SSH_KEY || "/home/ubuntu/.ssh/id_ed25519_monitor";
+const DISK_HOSTS = (process.env.DISK_HOSTS || "swap-server:,swap-node:100.124.145.15,btc-pruned:100.83.251.84")
+  .split(",").map((h) => h.trim()).filter(Boolean).map((h) => { const i = h.indexOf(":"); return { name: h.slice(0, i), host: h.slice(i + 1) || null }; });
 const now = Date.now();
 
 const short = (id) => (id || "").slice(0, 10);
 const fmtAmt = (s) => `${(s.btcSats || 0) / 1e8} BTC ⇄ ${(s.qbtSats || 0) / 1e8} QBT`;
 const mins = (ms) => Math.round(ms / 60000);
 const stEmoji = (st) => ({ CREATED: "🆕", READY: "🤝", FROM_FUNDED: "💰", TO_FUNDED: "💰", MATURING: "⏳", CLAIMABLE: "🔓", CLAIMED: "🔑", COMPLETE: "✅", REFUNDED: "↩️", CANCELED: "🚫", ABORTED: "⚠️" }[st] || "🔄");
+// Percent-used of the root filesystem on `host` (null = local): parse `df -P /`'s Capacity column. For a
+// remote host, ssh runs it via the forced-command key (any command → `df -P /`). Throws on failure.
+function diskPct(host) {
+  const out = host
+    ? execFileSync("ssh", ["-i", MONITOR_SSH_KEY, "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", "-o", "StrictHostKeyChecking=accept-new", `ubuntu@${host}`, "true"], { encoding: "utf8", timeout: 15000 })
+    : execFileSync("df", ["-P", "/"], { encoding: "utf8", timeout: 8000 });
+  const m = out.trim().split("\n").pop().match(/(\d+)%/);   // last line, Capacity column
+  if (!m) throw new Error("unparseable df output");
+  return Number(m[1]);
+}
 
 async function tg(text) {
   if (!TG_TOKEN || !TG_CHAT) { console.error("[no telegram]", text.replace(/<[^>]+>/g, "")); return; }
@@ -83,6 +103,18 @@ async function main() {
     if (prev == null || c.height !== prev) { state.heights[leg] = c.height; state.heightsAt[leg] = now; }
   }
 
+  // Disk usage across the fleet (swap-server local + the two nodes over the df-only SSH key). CRITICAL at
+  // ≥DISK_CRIT_PCT, WARN at ≥DISK_WARN_PCT; a host we can't reach for a df is its own WARN. maybeAlert +
+  // the resolve pass give these the same loud page + auto-recovery as node outages.
+  for (const { name, host } of DISK_HOSTS) {
+    let pct;
+    try { pct = diskPct(host); }
+    catch (e) { issues.push({ key: `disk-check-${name}`, sev: "WARN", msg: `⚠️ Can't read disk on <b>${name}</b>: ${String(e.message || e).split("\n")[0]}` }); continue; }
+    if (pct >= DISK_CRIT_PCT) issues.push({ key: `disk-${name}`, sev: "CRITICAL", msg: `🛑 Disk <b>${pct}% full</b> on <b>${name}</b> (≥${DISK_CRIT_PCT}%) — free space NOW` });
+    else if (pct >= DISK_WARN_PCT) issues.push({ key: `disk-${name}`, sev: "WARN", msg: `⚠️ Disk <b>${pct}% full</b> on <b>${name}</b> (≥${DISK_WARN_PCT}%)` });
+    state.disk = { ...(state.disk || {}), [name]: pct };   // last-seen % (for the recovery message)
+  }
+
   const swaps = await api("/api/swaps");
 
   // Ping on every swap STATE CHANGE — created, → funding, → claimable, → claimed, → complete, refunded, etc.
@@ -130,6 +162,8 @@ async function main() {
     let msg;
     if (key.startsWith("node-down-")) { const leg = key.slice(10); msg = `✅ ${leg.toUpperCase()} node reachable again${h(leg)}`; }
     else if (key.startsWith("stall-")) { const leg = key.slice(6); msg = `✅ ${leg.toUpperCase()} chain advancing again${h(leg)}`; }
+    else if (key.startsWith("disk-check-")) { msg = `✅ Disk readable again on <b>${key.slice(11)}</b>`; }
+    else if (key.startsWith("disk-")) { const name = key.slice(5); const pct = state.disk?.[name]; msg = `✅ Disk back under threshold on <b>${name}</b>${pct != null ? ` (${pct}%)` : ""}`; }
     else msg = `✅ Resolved: <code>${key}</code>`;
     await tg(msg); delete state.alerts[key];
   }
