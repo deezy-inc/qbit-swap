@@ -62,6 +62,22 @@
 - `GET  /offers/:id?makerToken=…` — 做市方视图，含该笔成交（其 swap 令牌），以便其履约
 - `POST /offers/:id/cancel`（做市方令牌）— 撤回一个未成交的挂单
 
+## RFQ API（可选 — `rfq.js`，为 web 应用的即时兑换组件提供流动性）
+获授权的做市机器人持续报出双边报价；散户一键按最优实时价格成交。与订单簿（挂出的一手报价）不同，
+RFQ 报价必须持续心跳维持：机器人一旦静默，其流动性将在 `RFQ_TTL_MS`（默认 30 秒）后失效，因此组件
+绝不会报出无人担保的价格。仅当设置 `RFQ_MAKER_KEYS=name:key,name2:key2` 时启用。价格为 BTC/QBT；
+数量为 `qbtSats`；`bid` = 做市方买入 QBT（散户卖出），`ask` = 做市方卖出 QBT。
+- `POST /rfq/maker`（请求头 `X-Maker-Key`）— 机器人的完整控制循环：（重新）声明 `{ bid?, ask? }`
+ （出现的一侧被替换，缺席的一侧沿用——`{}` 为纯保活），刷新 TTL，并接收 `matches`：等待该做市方的
+  成交，每条含做市方的 swap 令牌与角色。成交在做市方加入该 swap 之前每次心跳重复投递（无需确认协
+  议），随后像任何一方一样通过常规的单笔 swap API 履约。参考机器人见 `deploy/rfq-maker-trial.js`。
+- `GET  /rfq` — 公开深度：每侧最优价与总量（未配置做市方时 `enabled:false`）
+- `GET  /rfq/quote?side=buy|sell&btcSats=|qbtSats=` — 指定数量下的最优单一做市方成交（取整始终有利
+  于做市方）；实时流动性不足时返回 `409`
+- `POST /rfq/take` `{ side, btcSats|qbtSats, price }` — 限价语义：以 `price` 或更优成交，否则返回
+  `409`「价格已变动」并附新报价。创建 swap → `{ swapId, token, role, terms }`（散户买入 → 吃单方 =
+  alice/发起方；散户卖出 → 吃单方 = bob，由做市方发起）。
+
 ## Backends (env, per chain — see `chain.js`)
 每条链通过 `<CHAIN>_BACKEND` 选择一个后端（回退到 `COORD_CHAIN`，再回退到 `dev`）：
 - **`dev`** — 调用某个节点的命令行工具。设置 `<CHAIN>_CLI`，若要远程运行还需设置 `<CHAIN>_SSH_HOST`

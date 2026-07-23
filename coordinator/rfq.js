@@ -1,0 +1,150 @@
+// RFQ liquidity layer: authorized market-maker BOTS stream two-sided quotes; retail gets a one-click
+// price aggregated across them. Distinct from offers.js (the public peer order book of one-lot offers):
+// an RFQ quote is a STANDING price with size that must be actively re-pinged — if a bot stops pinging,
+// its liquidity drops out after RFQ_TTL_MS, so the widget can never quote from a dead maker. Taking a
+// quote instantiates a normal keyless swap (same engine, same safety flow); the maker learns about the
+// match in its next ping response and joins/fulfills through the ordinary per-swap API.
+//
+// Makers are configured (not open-registration): RFQ_MAKER_KEYS="name:key,name2:key2". The whole layer
+// is OFF unless at least one key is set. Prices are BTC per QBT (same orientation as offers.js);
+// sizes are qbtSats. bid = maker buys QBT (retail SELLS into it), ask = maker sells QBT (retail BUYS).
+//
+// Roles follow the engine's fixed rule (QBT buyer = alice/initiator): retail buy → taker=alice,
+// maker=bob; retail sell → maker=alice, taker=bob.
+import { createHash } from "node:crypto";
+import { createSwap, getSwap, MIN_SATS } from "./swap.js";
+
+export const RFQ_TTL_MS = Number(process.env.RFQ_TTL_MS || 30000);          // quote lifetime per ping
+const MATCH_RETENTION_MS = Number(process.env.RFQ_MATCH_RETENTION_MS || 86400000);   // stop re-delivering ancient matches
+const DONE = ["CANCELED", "COMPLETE", "REFUNDED", "ABORTED"];
+
+// makers: name -> { name, keyHash, quote: { bid|null, ask|null, at } | null, matches: [] }
+// Keys are never stored in cleartext (env-only secret); auth compares sha256 digests, which also makes
+// the comparison fixed-length (no length oracle).
+const makers = new Map();
+const keyHash = (k) => createHash("sha256").update(String(k)).digest("hex");
+for (const pair of (process.env.RFQ_MAKER_KEYS || "").split(",").map((s) => s.trim()).filter(Boolean)) {
+  const i = pair.indexOf(":");
+  if (i <= 0 || i === pair.length - 1) throw new Error(`RFQ_MAKER_KEYS entry must be name:key — got "${pair}"`);
+  const name = pair.slice(0, i);
+  if (makers.has(name)) throw new Error(`RFQ_MAKER_KEYS: duplicate maker name "${name}"`);
+  makers.set(name, { name, keyHash: keyHash(pair.slice(i + 1)), quote: null, matches: [] });
+}
+
+export const rfqEnabled = () => makers.size > 0;
+export function makerByKey(key) {
+  if (!key) return null;
+  const h = keyHash(key);
+  for (const m of makers.values()) if (m.keyHash === h) return m;
+  return null;
+}
+
+const now = () => Date.now();
+const live = (m) => !!m.quote && now() - m.quote.at < RFQ_TTL_MS;
+
+// One side of a quote: { price (BTC per QBT, > 0), qbtSats (max size at that price) }.
+function normSide(v, label) {
+  if (v == null) return null;                               // absent or explicit null → no quote on this side
+  const price = Number(v.price), qbtSats = Math.floor(Number(v.qbtSats));
+  if (!(price > 0) || !isFinite(price)) throw new Error(`${label}.price must be > 0 (BTC per QBT)`);
+  if (!(qbtSats > 0)) throw new Error(`${label}.qbtSats must be > 0`);
+  return { price, qbtSats };
+}
+// The maker's ping: restate (or update) the quote and refresh the TTL. Field semantics: a side that is
+// PRESENT (object or null) replaces that side; an ABSENT side carries the previous value forward — so a
+// bare {} ping is a pure keep-alive. Sizes are absolute (remaining size is overwritten by each ping; the
+// maker accounts for its own pending matches, which it sees in the same response).
+export function submitQuote(m, body = {}) {
+  const prev = m.quote || { bid: null, ask: null };
+  m.quote = {
+    bid: "bid" in body ? normSide(body.bid, "bid") : prev.bid,
+    ask: "ask" in body ? normSide(body.ask, "ask") : prev.ask,
+    at: now(),
+  };
+  return m.quote;
+}
+
+// Matches still awaiting this maker: delivered in EVERY ping until the maker joins the swap (submits
+// its party data) or the swap dies — idempotent, so a bot needs no ack protocol. Old/dead ones prune.
+export function pendingMatches(m) {
+  const t = now();
+  m.matches = m.matches.filter((x) => t - x.at < MATCH_RETENTION_MS && !DONE.includes(getSwap(x.swapId)?.state ?? "CANCELED"));
+  return m.matches.filter((x) => !getSwap(x.swapId)?.party?.[x.role]);
+}
+
+// ── retail pricing ────────────────────────────────────────────────────────────
+// side: "buy" = retail buys QBT (lifts maker asks, best = LOWEST price)
+//       "sell" = retail sells QBT (hits maker bids, best = HIGHEST price)
+// Amount is given on either leg; the other is derived from the maker's price, always rounded in the
+// MAKER's favor (a sat of rounding must never let retail extract size the maker didn't quote).
+const sideKey = (side) => (side === "buy" ? "ask" : "bid");
+function derive(side, price, { btcSats, qbtSats }) {
+  if (qbtSats > 0) return { qbtSats: Math.floor(qbtSats), btcSats: side === "buy" ? Math.ceil(qbtSats * price) : Math.floor(qbtSats * price) };
+  if (btcSats > 0) return { btcSats: Math.floor(btcSats), qbtSats: side === "buy" ? Math.floor(btcSats / price) : Math.ceil(btcSats / price) };
+  throw new Error("btcSats or qbtSats required");
+}
+function liveSides(side) {
+  const k = sideKey(side);
+  return [...makers.values()].filter((m) => live(m) && m.quote[k] && m.quote[k].qbtSats > 0).map((m) => ({ m, q: m.quote[k] }));
+}
+// Total size on a side + its best price — the widget's "liquidity available" line.
+export function depth() {
+  const agg = (side) => {
+    const xs = liveSides(side);
+    const prices = xs.map((x) => x.q.price);
+    return { qbtSats: xs.reduce((n, x) => n + x.q.qbtSats, 0), price: prices.length ? (side === "buy" ? Math.min(...prices) : Math.max(...prices)) : null, makers: xs.length };
+  };
+  return { enabled: rfqEnabled(), ttlMs: RFQ_TTL_MS, minSats: MIN_SATS, buy: agg("buy"), sell: agg("sell") };
+}
+
+// Best single-maker fill for the requested size (a swap has exactly one counterparty, so no splitting
+// across makers — v1 picks the best-priced maker whose remaining size covers the full amount).
+export function bestQuote(side, amounts) {
+  if (side !== "buy" && side !== "sell") throw new Error('side must be "buy" or "sell"');
+  const candidates = liveSides(side)
+    .map(({ m, q }) => ({ m, price: q.price, max: q.qbtSats, ...derive(side, q.price, amounts) }))
+    .filter((c) => c.qbtSats > 0 && c.qbtSats <= c.max)
+    .sort((a, b) => (side === "buy" ? a.price - b.price : b.price - a.price));
+  if (!candidates.length) {
+    const d = depth()[side];
+    const e = new Error(d.qbtSats > 0 ? "not enough liquidity for this size" : "no liquidity right now");
+    e.available = d.qbtSats;
+    throw e;
+  }
+  const c = candidates[0];
+  if (!(c.btcSats >= MIN_SATS.btc) || !(c.qbtSats >= MIN_SATS.qbit)) throw new Error(`amount too small (minimum ${MIN_SATS.btc / 1e8} BTC and ${MIN_SATS.qbit / 1e8} QBT)`);
+  return { side, price: c.price, btcSats: c.btcSats, qbtSats: c.qbtSats, ttlMs: RFQ_TTL_MS, _maker: c.m };   // _maker stripped before serving
+}
+export const publicQuote = ({ _maker, ...q }) => q;
+
+// Take: re-price at the CURRENT best and fill only if it's no worse than the price the retail user was
+// shown (limit semantics — a better price is fine, a worse one is a "price moved" reject so the UI can
+// re-quote). Creates the swap, queues the match for the maker's next ping, and decrements the maker's
+// remaining size so a second take can't consume liquidity the maker no longer has.
+export function takeRfq({ side, btcSats, qbtSats, price }) {
+  const lim = Number(price);
+  if (!(lim > 0)) throw new Error("price (the quoted price you accepted) is required");
+  const q = bestQuote(side, { btcSats: Number(btcSats) || 0, qbtSats: Number(qbtSats) || 0 });
+  const worse = side === "buy" ? q.price > lim * (1 + 1e-9) : q.price < lim * (1 - 1e-9);
+  if (worse) { const e = new Error("price moved — refresh the quote"); e.quote = publicQuote(q); throw e; }
+  const m = q._maker;
+  const takerRole = side === "buy" ? "alice" : "bob";      // QBT buyer is always the initiator
+  const makerRole = takerRole === "alice" ? "bob" : "alice";
+  const swap = createSwap({ btcSats: q.btcSats, qbtSats: q.qbtSats, securityLevel: "high" });
+  m.quote[sideKey(side)].qbtSats = Math.max(0, m.quote[sideKey(side)].qbtSats - q.qbtSats);
+  m.matches.push({ swapId: swap.id, token: swap.tokens[makerRole], role: makerRole, side: sideKey(side), price: q.price, btcSats: q.btcSats, qbtSats: q.qbtSats, at: now() });
+  return { swapId: swap.id, token: swap.tokens[takerRole], role: takerRole, terms: swap.terms, price: q.price };
+}
+
+// Admin/monitoring projection — quote ages + pending-match counts per maker; never the key (only its
+// hash exists) and never the per-swap tokens.
+export function rfqStatus() {
+  return {
+    enabled: rfqEnabled(), ttlMs: RFQ_TTL_MS,
+    makers: [...makers.values()].map((m) => ({
+      name: m.name, live: live(m), quoteAgeMs: m.quote ? now() - m.quote.at : null,
+      bid: m.quote?.bid || null, ask: m.quote?.ask || null,
+      pendingMatches: pendingMatches(m).length,
+    })),
+  };
+}

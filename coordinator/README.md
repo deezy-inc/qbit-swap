@@ -63,6 +63,24 @@ A maker/taker layer on top of the swap engine (the web app gates it behind a fla
 - `GET  /offers/:id?makerToken=…` — maker view incl. the take (its swap token) so it can fulfill
 - `POST /offers/:id/cancel` (maker token) — withdraw an open offer
 
+## RFQ API (optional — `rfq.js`, powers the web app's instant-swap widget)
+Authorized market-maker BOTS stream two-sided quotes; retail takes the best live price in one click.
+Unlike the order book (standing one-lot offers), an RFQ quote must be actively re-pinged: if a bot goes
+silent its liquidity drops out after `RFQ_TTL_MS` (default 30 s), so the widget never quotes a price
+nobody stands behind. Enabled only when `RFQ_MAKER_KEYS=name:key,name2:key2` is set. Prices are BTC per
+QBT; sizes are `qbtSats`; `bid` = maker buys QBT (retail sells into it), `ask` = maker sells QBT.
+- `POST /rfq/maker` (header `X-Maker-Key`) — the bot's whole control loop: (re)state `{ bid?, ask? }`
+  (a present side replaces, an absent side carries forward — `{}` is a pure keep-alive), refresh the
+  TTL, and receive `matches`: takes awaiting this maker, each with the maker's swap token + role.
+  Matches re-deliver every ping until the maker joins the swap (no ack protocol), then it fulfills
+  through the ordinary per-swap API like any party. `deploy/rfq-maker-trial.js` is the reference bot.
+- `GET  /rfq` — public depth: best price + total size per side (`enabled:false` when no makers configured)
+- `GET  /rfq/quote?side=buy|sell&btcSats=|qbtSats=` — best single-maker fill for a size (rounding always
+  favors the maker); `409` when live liquidity can't cover it
+- `POST /rfq/take` `{ side, btcSats|qbtSats, price }` — limit semantics: fills at `price` or better,
+  else `409` "price moved" with a fresh quote. Creates the swap → `{ swapId, token, role, terms }`
+  (retail buy → taker = alice/initiator; retail sell → taker = bob, the maker initiates).
+
 ## Backends (env, per chain — see `chain.js`)
 Each chain picks a backend via `<CHAIN>_BACKEND` (falls back to `COORD_CHAIN`, then `dev`):
 - **`dev`** — shells to a node CLI. Set `<CHAIN>_CLI` and, to run remotely, `<CHAIN>_SSH_HOST`

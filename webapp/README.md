@@ -33,6 +33,15 @@ It's gated behind `window.QBIT_ORDERBOOK` (default off) — with it off, choosin
 straight to the peer-to-peer flow, which is the primary experience. See `deploy/maker-trial.js` for a
 regtest maker that posts asks + fulfills takes.
 
+## Instant swap widget (feature-flagged, default OFF)
+A Uniswap-style **one-click swap card** on the landing hero, priced from live market-maker bot
+liquidity (the coordinator's `/rfq` API): pick a direction, type an amount on either side, the best
+live price fills the other side, and one click routes into the normal non-custodial flow (addresses →
+backup → live swap) with the winning maker as counterparty. Quotes are limit-protected — if the price
+moves against you between quote and confirm, you're shown the fresh price and asked to accept it,
+never filled worse. Gated behind `window.QBIT_RFQ` (default off); the widget also hides itself when
+the coordinator has no makers configured. See `deploy/rfq-maker-trial.js` for the reference maker bot.
+
 ## Key protection (`src/keystore.js`)
 For now (product decision) the ephemeral secrets are kept in the **clear**: a plaintext backup file
 the user downloads, plus a plaintext IndexedDB copy so a reload can resume. One file protects one

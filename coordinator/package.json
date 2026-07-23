@@ -4,7 +4,7 @@
   "description": "",
   "main": "chain.js",
   "scripts": {
-    "test": "node esplora.test.mjs && node wtfee.test.mjs && node feeaddr.test.mjs && node fee.test.mjs && node preimage_exposure.test.mjs",
+    "test": "node esplora.test.mjs && node wtfee.test.mjs && node feeaddr.test.mjs && node fee.test.mjs && node preimage_exposure.test.mjs && node rfq.test.mjs",
     "start": "node server.js"
   },
   "keywords": [],

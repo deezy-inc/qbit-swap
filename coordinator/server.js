@@ -4,6 +4,7 @@
 import http from "node:http";
 import { createSwap, getSwap, roleOf, submitParty, broadcast, view, poll, allSwaps, subscribe, markSeen, addConnection, dropConnection, sweepPresence, submitFinish, driveWatchtower, cancelSwap } from "./swap.js";
 import { createOffer, getOffer, isMaker, book, takeOffer, cancelOffer, makerView } from "./offers.js";
+import { rfqEnabled, makerByKey, submitQuote, pendingMatches, depth, bestQuote, publicQuote, takeRfq, RFQ_TTL_MS } from "./rfq.js";
 import { btc } from "./chain.js";
 import { btcFeerates, qbitFeerates, cachedBtcFeerates, cachedQbitFeerates } from "./fees.js";
 
@@ -71,6 +72,28 @@ async function handle(req, res) {
       // Every swap is btc2qbt: tokens.alice controls the QBT-buyer (initiator) side, tokens.bob the
       // QBT-seller side. The creator keeps whichever matches their side and shares the other as the link.
       return json(res, 201, { id: s.id, tokens: s.tokens });
+    }
+
+    // ── RFQ (market-maker bot liquidity → one-click retail swap) ──────────────
+    // Public: depth + quote + take. Maker: an authenticated ping that (re)states its quote, refreshes
+    // the TTL, and returns any matches awaiting it — one endpoint is a bot's whole control loop.
+    if (parts[0] === "rfq") {
+      if (method === "GET" && !parts[1]) return json(res, 200, depth());                     // widget: liquidity + best price (also how the app learns RFQ is on)
+      if (!rfqEnabled()) return json(res, 404, { error: "rfq disabled" });
+      if (method === "GET" && parts[1] === "quote") {
+        try { return json(res, 200, publicQuote(bestQuote(url.searchParams.get("side"), { btcSats: Number(url.searchParams.get("btcSats")) || 0, qbtSats: Number(url.searchParams.get("qbtSats")) || 0 }))); }
+        catch (e) { return json(res, 409, { error: String(e.message || e), available: e.available ?? undefined }); }
+      }
+      if (method === "POST" && parts[1] === "take") {
+        try { return json(res, 201, takeRfq(await readBody(req))); }
+        catch (e) { return json(res, 409, { error: String(e.message || e), quote: e.quote ?? undefined, available: e.available ?? undefined }); }
+      }
+      if (method === "POST" && parts[1] === "maker") {
+        const m = makerByKey(req.headers["x-maker-key"] || "");
+        if (!m) return json(res, 401, { error: "bad or missing X-Maker-Key" });
+        const quote = submitQuote(m, await readBody(req));
+        return json(res, 200, { ok: true, ttlMs: RFQ_TTL_MS, quote: { bid: quote.bid, ask: quote.ask }, matches: pendingMatches(m) });
+      }
     }
 
     // ── order book ────────────────────────────────────────────────────────────

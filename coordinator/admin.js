@@ -7,6 +7,7 @@ import http from "node:http";
 import { randomBytes } from "node:crypto";
 import { allSwaps, isOnline, subscribeAll } from "./swap.js";
 import { allOffers } from "./offers.js";
+import { rfqStatus } from "./rfq.js";
 import { qbit, btc } from "./chain.js";
 
 const TERMINAL = ["COMPLETE", "REFUNDED", "ABORTED"];
@@ -119,6 +120,7 @@ async function overview() {
     },
     volume: { btcSats: volBtc, qbtSats: volQbt },
     offers: { total: offers.length, ...offerCounts },
+    rfq: rfqStatus(),   // maker-bot liquidity: who's live, quote ages, pending matches (never keys/tokens)
   };
 }
 

@@ -44,6 +44,7 @@ const fetchFeerates = async () => (_feerates ||= await (await fetch(`${DEFAULT_C
 const FAUCET = globalThis.QBIT_TRIAL_FAUCET || null;
 const ORDERBOOK = globalThis.QBIT_ORDERBOOK === true;   // feature flag, default OFF — peer-to-peer only
 const RECENT_TRADES = globalThis.QBIT_RECENT_TRADES === true;   // feature flag, default OFF — public recent-trades tab
+const RFQ = globalThis.QBIT_RFQ === true;   // feature flag, default OFF — instant-swap widget backed by market-maker bot liquidity (/rfq)
 const FEE_BPS = Number(globalThis.QBIT_FEE_BPS || 0);   // >0 when the coordinator charges a platform fee (basis points)
 const MIN_SATS = globalThis.QBIT_MIN_SATS || null;   // min swap value per leg, injected from the coordinator's own config; null (not injected) → skip the up-front check and let the coordinator be the authority
 const appEl = document.getElementById("app");
@@ -226,6 +227,152 @@ const spinnerEl = (label) => h("div", { style: "display:flex;flex-direction:colu
   label ? h("span", { class: "muted", style: "font-size:14px" }, label) : null);
 const EMBLEM_SVG = `<svg viewBox="0 0 320 320" aria-hidden="true"><path class="core" d="m159.745 75.5137c46.2 0 83.652 37.4503 83.652 83.6483 0 46.197-37.452 83.648-83.652 83.648-46.199 0-83.6516-37.451-83.6516-83.648 0-46.198 37.4526-83.6483 83.6516-83.6483z"/><g class="orbit"><path d="m264.882 234.338c16.044 0 29.049 13.005 29.049 29.048 0 16.042-13.005 29.048-29.049 29.048-16.043 0-29.049-13.006-29.049-29.048 0-16.043 13.006-29.048 29.049-29.048z"/><path d="m46.1611 46.159c62.0959-62.0934 163.4069-61.4602 226.2849 1.4142 41.915 41.9136 56.167 100.9048 42.618 153.9748l-.026-.007c-1.478 5.001-6.104 8.652-11.584 8.652-6.672-.001-12.081-5.409-12.081-12.081 0-1.328.217-2.605.613-3.8 11.713-45.226-.14-95.2914-35.565-130.715-53.246-53.2434-139.575-53.2434-192.821 0-53.2456 53.243-53.2452 139.568.0007 192.812 35.4457 35.444 85.5513 47.29 130.7993 35.543 1.17-.377 2.416-.582 3.711-.582 6.672 0 12.081 5.408 12.081 12.08 0 5.477-3.645 10.099-8.642 11.58l.006.02c-53.071 13.548-112.0653-.704-153.9806-42.617-62.8774-62.874-63.5106-164.181-1.4143-226.274z"/></g></svg>`;
 
+// ── instant swap widget (RFQ maker-bot liquidity; flag QBIT_RFQ) ──────────────
+// A Uniswap-style two-panel card on the landing hero: pick a direction, type an amount on either side,
+// and the best live market-maker price fills the other side. One click routes into the normal
+// non-custodial swap flow with the winning maker as the counterparty — same HTLCs, same safety rails.
+// Liquidity is whatever bots are actively pinging /rfq right now; a silent bot's quotes drop away, so
+// the widget can never quote a price nobody stands behind. Amounts live in module state so a language
+// re-render doesn't wipe a half-typed trade.
+const inst = { dir: "btc2qbt", pay: "", recv: "", edited: "pay" };
+// coordGet drops JSON error payloads; RFQ errors carry data (available size, fresh quote) we want.
+const rfqGet = async (p) => { const r = await fetch(coordUrl(p)); const j = await r.json(); if (!r.ok) { const e = new Error(j.error || r.status); e.data = j; throw e; } return j; };
+function instantWidget() {
+  const box = h("div", { class: "inst", id: "inst" });
+  buildInst(box);
+  // One depth probe decides whether the widget shows at all (flag on but no makers configured → hide,
+  // the hero falls back to the classic CTAs which are rendered regardless, right below).
+  rfqGet("/rfq").then((d) => { if (!d.enabled) box.style.display = "none"; }).catch(() => { box.style.display = "none"; });
+  clearInterval(window._instTimer);
+  window._instTimer = setInterval(() => {   // keep a displayed price honest while the tab sits open
+    if (!document.getElementById("inst")) return clearInterval(window._instTimer);
+    if (box._requote) box._requote(true);
+  }, 10000);
+  return box;
+}
+function buildInst(box) {
+  const side = () => (inst.dir === "btc2qbt" ? "buy" : "sell");   // buy = retail buys QBT with BTC
+  const payCoin = () => (inst.dir === "btc2qbt" ? "BTC" : "QBT");
+  const recvCoin = () => (inst.dir === "btc2qbt" ? "QBT" : "BTC");
+  const amtIn = (v) => h("input", { class: "inst-amt", placeholder: "0", inputmode: "decimal", autocomplete: "off", value: v });
+  const payIn = amtIn(inst.pay), recvIn = amtIn(inst.recv);
+  const status = h("div", { class: "inst-status" }, "");
+  const avail = h("div", { class: "inst-avail" }, "");
+  const cta = h("button", { class: "primary btn-lg inst-cta", disabled: true }, t("instCta"));
+  let quote = null, seq = 0;
+
+  async function requote(silent = false) {
+    const editedIn = inst.edited === "pay" ? payIn : recvIn;
+    const editedCoin = inst.edited === "pay" ? payCoin() : recvCoin();
+    const otherIn = inst.edited === "pay" ? recvIn : payIn;
+    const amount = toSats(editedIn.value);
+    quote = null; cta.disabled = true;
+    if (!(amount > 0)) { status.textContent = ""; otherIn.value = ""; refreshAvail(); return; }
+    const my = ++seq;
+    if (!silent) status.textContent = t("instQuoting");
+    try {
+      const q = await rfqGet(`/rfq/quote?side=${side()}&${editedCoin === "BTC" ? "btcSats" : "qbtSats"}=${amount}`);
+      if (my !== seq) return;
+      quote = q;
+      const otherCoin = inst.edited === "pay" ? recvCoin() : payCoin();
+      otherIn.value = amtStr(otherCoin === "BTC" ? q.btcSats : q.qbtSats);
+      inst[inst.edited === "pay" ? "recv" : "pay"] = otherIn.value;
+      status.textContent = t("instPriceLine", { price: trimZeros(q.price.toFixed(8)) });
+      cta.disabled = false;
+    } catch (e) {
+      if (my !== seq) return;
+      otherIn.value = ""; inst[inst.edited === "pay" ? "recv" : "pay"] = "";
+      status.textContent = /not enough liquidity/.test(e.message) ? t("instTooBig", { qbt: sats(e.data?.available || 0) })
+        : /no liquidity/.test(e.message) ? t("instNoLiq") : e.message;
+    }
+    refreshAvail();
+  }
+  // "N QBT available" for the active side — how deep the one-click pool goes right now.
+  async function refreshAvail() {
+    try { const d = await rfqGet("/rfq"); const q = d[side()].qbtSats; avail.textContent = q > 0 ? t("instAvail", { qbt: sats(q) }) : t("instNoLiq"); } catch { avail.textContent = ""; }
+  }
+  let deb;
+  const onEdit = (which) => () => { inst.edited = which; inst[which] = (which === "pay" ? payIn : recvIn).value; clearTimeout(deb); deb = setTimeout(() => requote(), 350); };
+  payIn.oninput = onEdit("pay"); recvIn.oninput = onEdit("recv");
+
+  const panel = (labelKey, input, coin, feeNote) => h("div", { class: "inst-panel" },
+    h("div", { class: "inst-label" }, t(labelKey)),
+    h("div", { class: "inst-row" }, input, h("span", { class: "inst-coin" }, coin)),
+    feeNote ? h("div", { class: "inst-fee" }, feeNote) : null);
+  const payFee = (payCoin() === "BTC" && FEE_BPS > 0) ? t("instFeeNote", { pct: feePct() }) : null;
+  const switchBtn = h("button", { class: "inst-switch", "aria-label": t("instSwitch"), title: t("instSwitch"), onclick: () => {
+    inst.dir = inst.dir === "btc2qbt" ? "qbt2btc" : "btc2qbt";
+    [inst.pay, inst.recv] = [inst.recv, inst.pay];   // flip the trade: what you received becomes what you pay
+    inst.edited = "pay";
+    buildInst(box);
+  } }, "↓");
+  cta.onclick = () => {
+    if (!quote) return;
+    clearInterval(window._instTimer);
+    flow.mode = "rfq"; flow.rfqSide = quote.side; flow.rfqPrice = quote.price;
+    flow.role = quote.side === "buy" ? "alice" : "bob"; flow.direction = dirForRole(flow.role);
+    flow.btcSats = quote.btcSats; flow.qbtSats = quote.qbtSats;
+    flow.receiveAddr = ""; flow.refundAddr = ""; flow.fee = null; flow.verified = false;
+    stepRfqConfirm();
+  };
+  while (box.firstChild) box.removeChild(box.firstChild);
+  box.append(
+    panel("instPay", payIn, payCoin(), payFee),
+    switchBtn,
+    panel("instRecv", recvIn, recvCoin(), null),
+    h("div", { class: "inst-meta" }, status, avail),
+    cta);
+  box._requote = requote;
+  if (toSats(inst.pay) > 0 || toSats(inst.recv) > 0) requote(true); else refreshAvail();
+}
+// Confirm screen for an instant swap: the deal + the price, the fee gross-up for the BTC payer, and
+// the same custody/timing ground rules as the peer flow (minus "go find a counterparty" — the maker
+// bot IS the counterparty).
+function stepRfqConfirm() {
+  rerender = stepRfqConfirm;
+  const summary = flow.rfqSide === "buy"
+    ? t("buyingSummary", { qbt: sats(flow.qbtSats), btc: sats(flow.btcSats) })
+    : t("sellingSummary", { qbt: sats(flow.qbtSats), btc: sats(flow.btcSats) });
+  render(screen({
+    title: t("rfqConfirmTitle"), subtitle: t("rfqConfirmSub"),
+    body: [
+      h("div", { class: "fund" },
+        h("div", { style: "font-size:16px;font-weight:600" }, summary),
+        h("div", { class: "note", style: "margin-top:4px" }, t("rfqQuoteLine", { price: trimZeros(flow.rfqPrice.toFixed(8)) }))),
+      feeBreakdown(),
+      h("p", { class: "note" }, t("rfqConfirmP1")),
+      h("p", { class: "note" }, t("confirmP2")),
+      h("p", { class: "note" }, t("confirmP3")),
+    ],
+    cta: t("continue"), onCta: () => stepReceive(),
+    back: () => stepWelcome(),
+  }));
+}
+// Take the quote (LAST step, after addresses — so an abandoned setup never creates a swap the maker
+// gets matched into) and enter the swap like any taker. Limit semantics: fills at flow.rfqPrice or
+// better; on "price moved" we re-quote, update the held limit, and ask the user to press again.
+async function doRfqTake() {
+  let take;
+  try {
+    take = await coordPost("/rfq/take", { side: flow.rfqSide, qbtSats: flow.qbtSats, price: flow.rfqPrice });
+  } catch (e) {
+    if (/price moved|liquidity/i.test(e.message)) {
+      try {
+        const q = await rfqGet(`/rfq/quote?side=${flow.rfqSide}&qbtSats=${flow.qbtSats}`);
+        flow.rfqPrice = q.price; flow.btcSats = q.btcSats;
+        const err = new Error(t("instPriceMoved", { price: trimZeros(q.price.toFixed(8)) })); err.repriced = true; throw err;
+      } catch (e2) { throw e2.repriced ? e2 : e; }
+    }
+    throw e;
+  }
+  flow.btcSats = take.terms.btcSats; flow.qbtSats = take.terms.qbtSats;
+  flow.client = mkClient({ coordinator: flow.coordinator || DEFAULT_COORD });
+  await flow.client.enter({ id: take.swapId, token: take.token, direction: "btc2qbt", role: take.role, ...destsForClient() });
+  await vault.save(flow.client.secrets());
+  markEnteredAddrs(flow.client.id);
+  stepBackup(() => startLive());
+}
+
 // Landing page — hero + call-to-action + value props.
 function stepWelcome() {
   rerender = stepWelcome;
@@ -239,6 +386,7 @@ function stepWelcome() {
       h("div", { class: "hero-kicker" }, t("heroKicker")),
       h("h1", {}, t("heroTitle")),
       h("p", { class: "hero-sub" }, t("heroSub")),
+      RFQ ? instantWidget() : null,
       h("div", { class: "hero-cta" },
         h("button", { class: "primary btn-lg", onclick: () => stepChoose() }, t("heroStart")),
         h("button", { class: "btn-lg btn-ghost", onclick: () => stepInfo() }, t("heroLearn"))),
@@ -576,7 +724,7 @@ function stepReceive() {
     title: t("receiveTitle", { coin: recv }),
     body: [inp, h("p", { class: "note" }, t("feeNote"))], cta: t("continue"),
     onCta: () => { flow.receiveAddr = validAddr(inp.value, recv); stepRefund(); },
-    back: flow.mode === "create" ? () => stepAmount() : flow.mode === "take" ? () => stepTakeConfirm() : () => stepInvited(),
+    back: flow.mode === "create" ? () => stepAmount() : flow.mode === "take" ? () => stepTakeConfirm() : flow.mode === "rfq" ? () => stepRfqConfirm() : () => stepInvited(),
   }));
 }
 
@@ -585,13 +733,16 @@ function stepRefund() {
   const { send } = roleCoins();
   const inp = field(t("refundPlaceholder", { coin: send }));
   if (flow.refundAddr) inp.value = flow.refundAddr; else prefill(inp, send);
-  const cta = flow.mode === "create" ? t("createSwap") : flow.mode === "take" ? (flow.takeAction === "buy" ? t("buyNow") : t("sellNow")) : t("joinSwap");
+  const cta = flow.mode === "create" ? t("createSwap")
+    : flow.mode === "take" ? (flow.takeAction === "buy" ? t("buyNow") : t("sellNow"))
+    : flow.mode === "rfq" ? (flow.rfqSide === "buy" ? t("buyNow") : t("sellNow"))
+    : t("joinSwap");
   render(screen({
     title: t("refundTitle", { coin: send }),
     body: [h("p", { class: "note", style: "margin:18px 0 22px" }, t("refundSub")), inp], cta,
     onCta: async () => {
       flow.refundAddr = validAddr(inp.value, send);
-      flow.mode === "create" ? await doCreate() : flow.mode === "take" ? await doTake() : await doJoin();
+      flow.mode === "create" ? await doCreate() : flow.mode === "take" ? await doTake() : flow.mode === "rfq" ? await doRfqTake() : await doJoin();
     },
     back: () => stepReceive(),
   }));
@@ -1107,6 +1258,7 @@ window.addEventListener("drop", async (e) => {
 // ── API reference page (linked from the header) ───────────────────────────────
 const API_GROUPS = [
   { head: "apiSecPublic", eps: [["GET", "/health", "apiHealth"], ["GET", "/feerates", "apiFeerates"], ["GET", "/trades", "apiTrades"]] },
+  { head: "apiSecRfq", eps: [["GET", "/rfq", "apiRfqDepth"], ["GET", "/rfq/quote", "apiRfqQuote"], ["POST", "/rfq/take", "apiRfqTake"], ["POST", "/rfq/maker", "apiRfqMaker"]] },
   { head: "apiSecBook", eps: [["GET", "/offers", "apiBook"], ["POST", "/offers", "apiPostOffer"], ["POST", "/offers/:id/take", "apiTake"], ["GET", "/offers/:id", "apiMakerView"], ["POST", "/offers/:id/cancel", "apiCancelOffer"]] },
   { head: "apiSecSwap", eps: [["POST", "/swaps", "apiCreateSwap"], ["GET", "/swaps/:id", "apiView"], ["GET", "/swaps/:id/events", "apiEvents"], ["POST", "/swaps/:id/party", "apiParty"], ["POST", "/swaps/:id/broadcast", "apiBroadcast"], ["POST", "/swaps/:id/finish", "apiFinish"], ["POST", "/swaps/:id/cancel", "apiCancelSwap"], ["GET", "/swaps/:id/beat", "apiBeat"]] },
 ];
