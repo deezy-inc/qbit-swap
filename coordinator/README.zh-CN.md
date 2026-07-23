@@ -82,6 +82,14 @@ RFQ 手续费由**吃单方承担**（点对点链接兑换保持买方承担的
 BTC 发送方，充值 `terms + fee`）；卖出则将吃单方的 BTC 所得按净额报价（`takerNetOfGross`），因此
 做市方的总支出恰好等于其报价 × 数量。
 
+**信誉 / 成交率。** 协调器无法锁定做市方的资金，因此改为观察其实际行为：在其*已具备充值条件*的匹配
+中，有多少次真正充值了自己那一条腿。归因是区分责任的——若吃单方自己都未先充值其首条腿，则不计入
+做市方（买入时，在吃单方的 BTC 埋足确认前，做市方本就无法充值）。在 `RFQ_REP_WINDOW_MS` 时间窗内
+达到 `RFQ_REP_SUSPEND` 次未履约的做市方将被自动暂停（其报价停止对外提供），直至这些不良记录随时间
+淡出。各做市方的统计（`fillRate`、`noShow`、`suspended` 等）显示在管理总览的 `rfq` 部分。可调参数：
+`RFQ_REP_GRACE_MS`（15 分钟——已具备充值条件但未充值多久后计为未履约）、`RFQ_REP_WINDOW_MS`（1 小时）、
+`RFQ_REP_SUSPEND`（3；设为 0 可禁用）。
+
 ## Backends (env, per chain — see `chain.js`)
 每条链通过 `<CHAIN>_BACKEND` 选择一个后端（回退到 `COORD_CHAIN`，再回退到 `dev`）：
 - **`dev`** — 调用某个节点的命令行工具。设置 `<CHAIN>_CLI`，若要远程运行还需设置 `<CHAIN>_SSH_HOST`

@@ -18,6 +18,19 @@ export const RFQ_TTL_MS = Number(process.env.RFQ_TTL_MS || 30000);          // q
 const MATCH_RETENTION_MS = Number(process.env.RFQ_MATCH_RETENTION_MS || 86400000);   // stop re-delivering ancient matches
 const DONE = ["CANCELED", "COMPLETE", "REFUNDED", "ABORTED"];
 
+// ── reputation / fill-rate ──────────────────────────────────────────────────────────────────────
+// A maker that gets matched but doesn't fund its leg leaves a taker stranded (on a buy the taker already
+// deposited BTC first and must wait out a timelock). We can't lock a maker's funds, so instead we watch
+// what it actually DOES: of the matches where the maker was cleared to fund, how often did it? A maker
+// that no-shows repeatedly in a rolling window is auto-suspended (its quotes stop being served) until the
+// bad marks age out — cheap, permissionless-friendly, and it punishes the real failure (not funding),
+// not a proxy for it. Attribution is fault-aware: a taker who never funds their own first leg is NOT
+// counted against the maker (on a buy the maker legitimately can't fund until the taker's BTC buries).
+const REP_GRACE_MS = Number(process.env.RFQ_REP_GRACE_MS || 900000);     // 15m after it's cleared to fund → a still-unfunded match is a no-show
+const REP_WINDOW_MS = Number(process.env.RFQ_REP_WINDOW_MS || 3600000);  // rolling window for the suspension count
+const REP_SUSPEND = Number(process.env.RFQ_REP_SUSPEND || 3);            // this many no-shows in the window → suspended (0 disables)
+const REP_HISTORY = Number(process.env.RFQ_REP_HISTORY || 500);          // cap the per-maker match log
+
 // makers: name -> { name, keyHash, quote: { bid|null, ask|null, at } | null, matches: [] }
 // Keys are never stored in cleartext (env-only secret); auth compares sha256 digests, which also makes
 // the comparison fixed-length (no length oracle).
@@ -28,7 +41,7 @@ for (const pair of (process.env.RFQ_MAKER_KEYS || "").split(",").map((s) => s.tr
   if (i <= 0 || i === pair.length - 1) throw new Error(`RFQ_MAKER_KEYS entry must be name:key — got "${pair}"`);
   const name = pair.slice(0, i);
   if (makers.has(name)) throw new Error(`RFQ_MAKER_KEYS: duplicate maker name "${name}"`);
-  makers.set(name, { name, keyHash: keyHash(pair.slice(i + 1)), quote: null, matches: [] });
+  makers.set(name, { name, keyHash: keyHash(pair.slice(i + 1)), quote: null, matches: [], history: [] });
 }
 
 export const rfqEnabled = () => makers.size > 0;
@@ -96,9 +109,52 @@ function derive(side, price, { btcSats, qbtSats }) {
   }
   throw new Error("btcSats or qbtSats required");
 }
+// Classify one past match by what the maker did, fault-aware. Reads the live swap the match created.
+//   completed    — swap settled COMPLETE (maker delivered, taker too)
+//   funded       — maker funded its leg (swap in flight or ended non-complete for reasons past funding)
+//   no-show      — maker was CLEARED to fund but didn't (terminal without its deposit, or grace elapsed)
+//   waiting-taker/taker-abort — the TAKER never funded their first leg, so the maker couldn't act: NOT
+//                  attributed to the maker (on a buy the maker's QBT can't be funded until the taker's
+//                  BTC buries; a bid maker funds first, so it's always "cleared").
+//   gone         — swap no longer in the store (unknown; ignored)
+function classifyMatch(h) {
+  const s = getSwap(h.swapId);
+  if (!s) return "gone";
+  const makerLeg = h.role === "alice" ? s.roles?.fromLeg : s.roles?.toLeg;   // the leg THIS maker funds
+  if (s.state === "COMPLETE") return "completed";
+  if (makerLeg && s.funding?.[makerLeg]) return "funded";
+  const cleared = h.role === "alice" ? true : !!s.fromConfirmedAt;           // bid maker funds first (always cleared); ask maker only once the taker's BTC buries
+  const terminal = DONE.includes(s.state);
+  if (!cleared) return terminal ? "taker-abort" : "waiting-taker";           // taker's fault / still early — not the maker's
+  if (terminal) return "no-show";                                            // cleared, ended, never funded
+  const since = h.role === "alice" ? h.at : (s.fromConfirmedAt || h.at);
+  return now() - since > REP_GRACE_MS ? "no-show" : "pending";               // cleared but still unfunded → grace decides
+}
+// Aggregate a maker's reputation from its match history + the live swaps those matches created.
+export function makerRep(m) {
+  const c = { completed: 0, funded: 0, "no-show": 0, pending: 0, "waiting-taker": 0, "taker-abort": 0, gone: 0 };
+  let recentNoShow = 0;
+  for (const h of m.history) {
+    const k = classifyMatch(h);
+    c[k]++;
+    if (k === "no-show" && now() - h.at < REP_WINDOW_MS) recentNoShow++;
+  }
+  const delivered = c.completed + c.funded;                                  // maker did its leg
+  const obligated = delivered + c["no-show"];                               // times it was cleared AND resolved
+  const suspended = REP_SUSPEND > 0 && recentNoShow >= REP_SUSPEND;
+  return {
+    matched: m.history.length, completed: c.completed, funded: delivered, noShow: c["no-show"], pending: c.pending,
+    notAttributed: c["waiting-taker"] + c["taker-abort"],
+    fillRate: obligated ? delivered / obligated : null,                      // null = no attributable history yet
+    recentNoShow, suspended,
+  };
+}
+export const makerSuspended = (m) => makerRep(m).suspended;
+
 function liveSides(side) {
   const k = sideKey(side);
-  return [...makers.values()].filter((m) => live(m) && m.quote[k] && m.quote[k].qbtSats > 0).map((m) => ({ m, q: m.quote[k] }));
+  // A suspended maker (too many recent no-shows) is dropped from the book until its bad marks age out.
+  return [...makers.values()].filter((m) => live(m) && !makerSuspended(m) && m.quote[k] && m.quote[k].qbtSats > 0).map((m) => ({ m, q: m.quote[k] }));
 }
 // Total size on a side + its best price — the widget's "liquidity available" line.
 export function depth() {
@@ -145,7 +201,10 @@ export function takeRfq({ side, btcSats, qbtSats, price }) {
   const makerRole = takerRole === "alice" ? "bob" : "alice";
   const swap = createSwap({ btcSats: q.btcSats, qbtSats: q.qbtSats, securityLevel: "high" });
   m.quote[sideKey(side)].qbtSats = Math.max(0, m.quote[sideKey(side)].qbtSats - q.qbtSats);
-  m.matches.push({ swapId: swap.id, token: swap.tokens[makerRole], role: makerRole, side: sideKey(side), price: q.price, btcSats: q.btcSats, qbtSats: q.qbtSats, at: now() });
+  const match = { swapId: swap.id, token: swap.tokens[makerRole], role: makerRole, side: sideKey(side), price: q.price, btcSats: q.btcSats, qbtSats: q.qbtSats, at: now() };
+  m.matches.push(match);
+  m.history.push({ swapId: swap.id, role: makerRole, at: match.at });   // append-only reputation log (matches[] gets pruned; this doesn't)
+  if (m.history.length > REP_HISTORY) m.history.shift();
   return { swapId: swap.id, token: swap.tokens[takerRole], role: takerRole, terms: swap.terms, price: q.price };
 }
 
@@ -155,9 +214,10 @@ export function rfqStatus() {
   return {
     enabled: rfqEnabled(), ttlMs: RFQ_TTL_MS,
     makers: [...makers.values()].map((m) => ({
-      name: m.name, live: live(m), quoteAgeMs: m.quote ? now() - m.quote.at : null,
+      name: m.name, live: live(m), suspended: makerSuspended(m), quoteAgeMs: m.quote ? now() - m.quote.at : null,
       bid: m.quote?.bid || null, ask: m.quote?.ask || null,
       pendingMatches: pendingMatches(m).length,
+      reputation: makerRep(m),
     })),
   };
 }

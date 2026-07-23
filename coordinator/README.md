@@ -85,6 +85,15 @@ Fees are **taker-pays** on RFQ (peer link swaps keep the buyer-pays gross-up): a
 the taker (they're the BTC sender, funding `terms + fee`); a sell quotes the taker's BTC proceeds NET
 of the fee (`takerNetOfGross`), so the maker's all-in outlay equals exactly its quoted price × size.
 
+**Reputation / fill-rate.** The coordinator can't lock a maker's funds, so it watches what each maker
+actually does: of the matches where it was *cleared to fund*, how often it funded its leg. Attribution
+is fault-aware — a taker who never funds their own first leg is not charged against the maker (on a buy
+the maker legitimately can't fund until the taker's BTC buries). A maker with `RFQ_REP_SUSPEND` no-shows
+inside `RFQ_REP_WINDOW_MS` is auto-suspended (its quotes stop being served) until the bad marks age out.
+Per-maker stats (`fillRate`, `noShow`, `suspended`, …) surface in the admin overview's `rfq` section.
+Knobs: `RFQ_REP_GRACE_MS` (15m — how long a cleared-but-unfunded match waits before it's a no-show),
+`RFQ_REP_WINDOW_MS` (1h), `RFQ_REP_SUSPEND` (3; 0 disables).
+
 ## Backends (env, per chain — see `chain.js`)
 Each chain picks a backend via `<CHAIN>_BACKEND` (falls back to `COORD_CHAIN`, then `dev`):
 - **`dev`** — shells to a node CLI. Set `<CHAIN>_CLI` and, to run remotely, `<CHAIN>_SSH_HOST`
