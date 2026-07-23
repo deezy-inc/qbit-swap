@@ -5,7 +5,7 @@
 // with ADMIN_TOKEN. Read-only: it exposes no mutation endpoints and redacts capability tokens.
 import http from "node:http";
 import { randomBytes } from "node:crypto";
-import { allSwaps, isOnline, subscribeAll } from "./swap.js";
+import { allSwaps, isOnline, subscribeAll, storeBackend } from "./swap.js";
 import { allOffers } from "./offers.js";
 import { rfqStatus } from "./rfq.js";
 import { qbit, btc } from "./chain.js";
@@ -106,7 +106,7 @@ async function overview() {
   const offerCounts = offers.reduce((a, o) => ((a[o.status] = (a[o.status] || 0) + 1), a), {});
   const [b, q] = await Promise.all([chainInfo(btc), chainInfo(qbit)]);
   return {
-    now: Date.now(), network: process.env.NETWORK || "regtest",
+    now: Date.now(), network: process.env.NETWORK || "regtest", persistence: storeBackend(),
     chains: { btc: b, qbit: q },
     counts,
     totals: {

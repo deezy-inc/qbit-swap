@@ -127,7 +127,12 @@ Each chain picks a backend via `<CHAIN>_BACKEND` (falls back to `COORD_CHAIN`, t
   rate-limit handling (`ESPLORA_MIN_INTERVAL_MS`, `ESPLORA_MAX_RETRIES`). This backend is BTC-only, so the
   QBT leg uses `dev`/`rpc` against your own `qbitd` (its data source — unrelated to how broadcastable QBT is).
 
-Other knobs: `COORD_DB=/path/state.json` (JSON snapshot persistence, written atomically via temp+rename; default in-memory) · `RATE_MAX=120`
+Other knobs: `COORD_DB=/path/state.db` (**sqlite** persistence via `node:sqlite` — one row per swap,
+UPSERTed per change so `touch()` is O(1), not a full-file rewrite; the swap is a JSON column, queryable
+with JSON1: `SELECT id FROM swaps WHERE json_extract(data,'$.state')='COMPLETE'`. A `.json` path uses the
+legacy atomic-snapshot backend instead; a fresh `.db` next to an existing `.json` imports it on first
+boot. Default: in-memory, no persistence. `persistence` in `/api/overview` shows the active backend.) ·
+`RATE_MAX=120`
 (per-IP writes/min) · `DEV_CONFS_CAP` (cap the reorg-safe conf gate on hashrate-less regtest).
 
 ### HTLC addresses + timelocks (set these for the deploy network)

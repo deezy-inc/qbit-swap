@@ -123,7 +123,11 @@ BTC 发送方，充值 `terms + fee`）；卖出则将吃单方的 BTC 所得按
   限流处理（`ESPLORA_MIN_INTERVAL_MS`、`ESPLORA_MAX_RETRIES`）。Qbit 没有公开后端，因此
   QBT 腿必须针对你自己的 `qbitd` 使用 `dev`/`rpc`。
 
-其他可调项：`COORD_DB=/path/state.json`（JSON 持久化；默认在内存中）· `RATE_MAX=120`
+其他可调项：`COORD_DB=/path/state.db`（通过 `node:sqlite` 的 **sqlite** 持久化——每个 swap 一行，按变更
+UPSERT，因此 `touch()` 为 O(1)，而非整文件重写；swap 以 JSON 列存储，可用 JSON1 查询：
+`SELECT id FROM swaps WHERE json_extract(data,'$.state')='COMPLETE'`。`.json` 路径则使用旧的原子快照后端；
+空的 `.db` 若旁边存在 `.json` 会在首次启动时导入。默认：内存中，不持久化。`/api/overview` 的
+`persistence` 字段显示当前后端。）· `RATE_MAX=120`
 （每 IP 每分钟写入数）· `DEV_CONFS_CAP`（在没有算力的回归测试网上封顶抗重组确认门槛）。
 
 ### HTLC addresses + timelocks (set these for the deploy network)

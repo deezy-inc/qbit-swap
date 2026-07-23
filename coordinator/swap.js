@@ -13,7 +13,6 @@
 // by which token (alice/bob) each party holds; the vulnerable "initiator sells QBT" arrangement is no
 // longer constructible. `direction` is retained as "btc2qbt" on every swap for view/compat.
 import { randomBytes } from "node:crypto";
-import { readFileSync, writeFileSync, renameSync } from "node:fs";
 import { sha256 } from "@noble/hashes/sha2.js";
 import { bytesToHex as hex, hexToBytes as bin } from "@noble/hashes/utils.js";
 import {
@@ -24,6 +23,7 @@ import {
 import { qbit, btc } from "./chain.js";
 import { btcFeerates, cachedBtcFeerates, cachedQbitFeerates } from "./fees.js";
 import { feeAddress, validateFeeKey } from "./feeaddr.js";
+import { makeStore } from "./store.js";
 
 export const States = ["CREATED", "READY", "FROM_FUNDED", "TO_FUNDED", "MATURING", "CLAIMABLE", "CLAIMED", "COMPLETE", "REFUNDED", "ABORTED"];
 const TERMINAL = ["COMPLETE", "REFUNDED", "ABORTED"];
@@ -33,21 +33,13 @@ const chainOf = (leg) => (leg === "btc" ? btc : qbit);
 const swaps = new Map();
 const token = () => randomBytes(16).toString("hex");
 
-// ── persistence (optional JSON snapshot; set COORD_DB) ────────────────────────
-const DB_PATH = process.env.COORD_DB || null;
-function persist() {
-  if (!DB_PATH) return;
-  const dump = [...swaps.values()].map(({ _sig, _online, presence, ...s }) => s);   // presence is ephemeral
-  // Atomic write: a plain writeFileSync truncates the file first, so power-loss MID-WRITE leaves a
-  // corrupt/empty JSON that load() then discards → total state loss. Write a temp file, fsync-durable via
-  // the OS, then rename() (atomic on the same filesystem) so the live file is always a complete snapshot.
-  try { const tmp = `${DB_PATH}.tmp`; writeFileSync(tmp, JSON.stringify(dump)); renameSync(tmp, DB_PATH); } catch { /* best effort */ }
-}
-function load() {
-  if (!DB_PATH) return;
-  try { for (const s of JSON.parse(readFileSync(DB_PATH, "utf8"))) swaps.set(s.id, s); } catch { /* fresh start */ }
-}
-load();
+// ── persistence (optional; COORD_DB → .db/.sqlite = per-row sqlite, else JSON snapshot) ──────────────
+// The store checkpoints in-memory state so a restart resumes in-flight swaps. touch() writes just the
+// changed swap (O(1) on the sqlite backend), so this scales past the JSON snapshot's full-file rewrite.
+const store = makeStore(process.env.COORD_DB || null, () => [...swaps.values()]);
+export const storeBackend = () => store.backend;
+export const storeQuery = (sql, ...params) => (store.query ? store.query(sql, ...params) : null);   // sqlite only; null otherwise
+for (const s of store.load()) swaps.set(s.id, s);
 
 // ── change pub/sub (drives SSE) ───────────────────────────────────────────────
 const subs = new Map();
@@ -67,7 +59,7 @@ function emit(s) {
 function touch(s) {
   const g = sigOf(s);
   if (g === s._sig) return s;
-  s._sig = g; persist();
+  s._sig = g; store.put(s);   // persist just this swap (O(1) on sqlite; JSON backend rewrites the snapshot)
   emit(s);
   return s;
 }
