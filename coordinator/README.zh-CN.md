@@ -78,6 +78,10 @@ RFQ 报价必须持续心跳维持：机器人一旦静默，其流动性将在 
   `409`「价格已变动」并附新报价。创建 swap → `{ swapId, token, role, terms }`（散户买入 → 吃单方 =
   alice/发起方；散户卖出 → 吃单方 = bob，由做市方发起）。
 
+RFQ 手续费由**吃单方承担**（点对点链接兑换保持买方承担的加收结构）：买入本来就由吃单方支付（其为
+BTC 发送方，充值 `terms + fee`）；卖出则将吃单方的 BTC 所得按净额报价（`takerNetOfGross`），因此
+做市方的总支出恰好等于其报价 × 数量。
+
 ## Backends (env, per chain — see `chain.js`)
 每条链通过 `<CHAIN>_BACKEND` 选择一个后端（回退到 `COORD_CHAIN`，再回退到 `dev`）：
 - **`dev`** — 调用某个节点的命令行工具。设置 `<CHAIN>_CLI`，若要远程运行还需设置 `<CHAIN>_SSH_HOST`

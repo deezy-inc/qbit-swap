@@ -1,32 +1,18 @@
 # TODO
 
-## Discuss: who pays the platform fee on RFQ swaps — taker, maker, or split?
+## ✅ DECIDED (2026-07-23): RFQ fees are taker-pays; peer link swaps keep buyer-pays
 
-**Today's mechanics** (`swap.js` `deriveFee`): the platform fee (`FEE_BPS`, e.g. 2%) + network-fee
-reserve is always charged **on top of the BTC leg**, paid by whoever sends BTC — i.e. the QBT *buyer*,
-regardless of whether that party is the taker or the maker. Under the RFQ widget that means:
+Danny's call: charge the platform fee to the **taker** in the retail-vs-market-maker (RFQ) setup —
+the standard model everywhere (takers buy immediacy; charging makers just widens quoted spreads) —
+and keep the existing buyer-pays structure for mutually-agreed link swaps.
 
-- retail **buys** QBT → the retail **taker** pays the 2% (they're the BTC sender) ✅ taker pays
-- retail **sells** QBT → the **maker** pays the 2% (the maker is the BTC sender) ⚠️ maker pays
+**Implemented** (rfq.js `derive()` + swap.js `takerNetOfGross`/`feeTotalOn`; engine mechanics — the
+fee output riding the BTC leg — untouched):
+- RFQ **buy**: taker is the BTC sender, so the normal gross-up (`terms + fee` on top) already charges
+  the taker; the maker receives `terms.btcSats` in full. Unchanged.
+- RFQ **sell**: the quote nets the fee out of the taker's BTC proceeds
+  (`terms.btcSats = takerNetOfGross(size × bid)`), so the maker's all-in outlay (`terms + fee`)
+  equals exactly its quoted price × size. The widget discloses the net under the receive panel.
+- Peer link swaps (and the flagged order book): buyer-pays, exactly as before.
 
-So the fee burden currently flips with direction — makers eat the fee on every retail sell, which
-they'll simply price into a wider bid (retail pays it anyway, just invisibly and only on one side).
-
-**What's standard**: on virtually every venue (CEXs, Uniswap-style AMMs, RFQ desks) the **taker pays**
-— takers consume liquidity and pay for immediacy; makers provide liquidity and pay less, zero, or get
-rebates. Maker-pays is rare because it directly widens quoted spreads. A maker/taker split (e.g.
-taker 1.5% / maker 0.5%) exists on CEXs but mostly as a volume-tier device.
-
-**Options**
-1. **Taker always pays** (standard): charge the fee to whichever party took the quote, on the coin
-   they send. Needs a small engine change — fee today is only collectible on the BTC leg (the fee
-   output rides the BTC HTLC deposit); a QBT-side fee needs a QBT fee output or a BTC-equivalent
-   gross-up on the taker's QBT deposit.
-2. **Keep buyer-pays** (status quo): zero engine work; accept that makers price the sell-side fee
-   into their bids (economically similar to taker-pays, less transparent, distorts displayed price
-   competitiveness between sides).
-3. **Split** (e.g. bps on each side): both parties gross up their deposit by their share. Most work,
-   mostly useful later as a maker-incentive lever.
-
-**Decide with Danny**: which model, and whether the RFQ widget should display the fee-inclusive
-"all-in" price (probably yes either way).
+Locked by `coordinator/rfq_fee.test.mjs`.

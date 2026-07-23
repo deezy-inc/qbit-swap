@@ -148,6 +148,27 @@ if (FEE_ON) {
     }
   } catch (e) { throw new Error(`fee config invalid: ${e.message}`); }
 }
+// ── taker-pays pricing helpers (used by rfq.js; the fee MECHANICS are unchanged) ──────────────
+// Fee incidence policy: peer link swaps keep buyer-pays (the BTC sender grosses up by the fee). RFQ
+// swaps are TAKER-pays — a retail BUY already is (the taker is the BTC sender), and for a retail SELL
+// the rfq layer quotes the taker's BTC proceeds NET of the fee, so the maker's all-in outlay
+// (terms.btcSats + fee) equals exactly its quoted price. These helpers do that arithmetic here, next
+// to the knobs (FEE_BPS/FEE_MIN_SATS/reserve), so rfq.js can never drift from what deriveFee charges.
+// The full fee that WOULD be charged on a swap of `btcSats` (0 when fees are off).
+export const feeTotalOn = (btcSats) => (FEE_ON ? composeFee(Math.round((btcSats * FEE_BPS) / 10000), estBtcClaimFee(), FEE_MIN_SATS).sats : 0);
+// The largest btcSats such that btcSats + fee(btcSats) ≤ gross — i.e. what a sell-side taker nets when
+// the maker's total outlay is capped at `gross` (its quoted price × size). Handles the FEE_MIN_SATS
+// step (below the floor only the network reserve is charged).
+export function takerNetOfGross(gross) {
+  if (!FEE_ON) return Math.max(0, gross);
+  const net = estBtcClaimFee();
+  const noPlat = gross - net;                                                     // candidate when the platform cut is floored away
+  if (Math.round((noPlat * FEE_BPS) / 10000) < FEE_MIN_SATS) return Math.max(0, noPlat);
+  let b = Math.floor(((gross - net) * 10000) / (10000 + FEE_BPS)) + 1;            // closed form, then settle the ±1-sat rounding
+  while (b > 0 && b + feeTotalOn(b) > gross) b--;
+  return b;
+}
+
 // A swap's coordinator fee (or null when off / below the floor): a fresh address + the sats charged.
 function deriveFee(btcSats) {
   if (!FEE_ON) return null;

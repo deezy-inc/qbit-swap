@@ -300,6 +300,8 @@ function buildInst(box) {
     h("div", { class: "inst-row" }, input, h("span", { class: "inst-coin" }, coin)),
     feeNote ? h("div", { class: "inst-fee" }, feeNote) : null);
   const payFee = (payCoin() === "BTC" && FEE_BPS > 0) ? t("instFeeNote", { pct: feePct() }) : null;
+  // Taker-pays on sells too: the quoted BTC proceeds arrive NET of the platform fee — say so.
+  const recvFee = (recvCoin() === "BTC" && FEE_BPS > 0) ? t("instFeeNoteSell", { pct: feePct() }) : null;
   const switchBtn = h("button", { class: "inst-switch", "aria-label": t("instSwitch"), title: t("instSwitch"), onclick: () => {
     inst.dir = inst.dir === "btc2qbt" ? "qbt2btc" : "btc2qbt";
     [inst.pay, inst.recv] = [inst.recv, inst.pay];   // flip the trade: what you received becomes what you pay
@@ -319,7 +321,7 @@ function buildInst(box) {
   box.append(
     panel("instPay", payIn, payCoin(), payFee),
     switchBtn,
-    panel("instRecv", recvIn, recvCoin(), null),
+    panel("instRecv", recvIn, recvCoin(), recvFee),
     h("div", { class: "inst-meta" }, status, avail),
     cta);
   box._requote = requote;
@@ -340,6 +342,7 @@ function stepRfqConfirm() {
         h("div", { style: "font-size:16px;font-weight:600" }, summary),
         h("div", { class: "note", style: "margin-top:4px" }, t("rfqQuoteLine", { price: trimZeros(flow.rfqPrice.toFixed(8)) }))),
       feeBreakdown(),
+      flow.rfqSide === "sell" && FEE_BPS > 0 ? h("p", { class: "note" }, t("instFeeNoteSell", { pct: feePct() })) : null,
       h("p", { class: "note" }, t("rfqConfirmP1")),
       h("p", { class: "note" }, t("confirmP2")),
       h("p", { class: "note" }, t("confirmP3")),

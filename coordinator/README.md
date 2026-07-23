@@ -81,6 +81,10 @@ QBT; sizes are `qbtSats`; `bid` = maker buys QBT (retail sells into it), `ask` =
   else `409` "price moved" with a fresh quote. Creates the swap → `{ swapId, token, role, terms }`
   (retail buy → taker = alice/initiator; retail sell → taker = bob, the maker initiates).
 
+Fees are **taker-pays** on RFQ (peer link swaps keep the buyer-pays gross-up): a buy already charges
+the taker (they're the BTC sender, funding `terms + fee`); a sell quotes the taker's BTC proceeds NET
+of the fee (`takerNetOfGross`), so the maker's all-in outlay equals exactly its quoted price × size.
+
 ## Backends (env, per chain — see `chain.js`)
 Each chain picks a backend via `<CHAIN>_BACKEND` (falls back to `COORD_CHAIN`, then `dev`):
 - **`dev`** — shells to a node CLI. Set `<CHAIN>_CLI` and, to run remotely, `<CHAIN>_SSH_HOST`

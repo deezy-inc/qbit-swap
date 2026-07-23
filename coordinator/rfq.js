@@ -12,7 +12,7 @@
 // Roles follow the engine's fixed rule (QBT buyer = alice/initiator): retail buy → taker=alice,
 // maker=bob; retail sell → maker=alice, taker=bob.
 import { createHash } from "node:crypto";
-import { createSwap, getSwap, MIN_SATS } from "./swap.js";
+import { createSwap, getSwap, MIN_SATS, feeTotalOn, takerNetOfGross } from "./swap.js";
 
 export const RFQ_TTL_MS = Number(process.env.RFQ_TTL_MS || 30000);          // quote lifetime per ping
 const MATCH_RETENTION_MS = Number(process.env.RFQ_MATCH_RETENTION_MS || 86400000);   // stop re-delivering ancient matches
@@ -77,10 +77,23 @@ export function pendingMatches(m) {
 //       "sell" = retail sells QBT (hits maker bids, best = HIGHEST price)
 // Amount is given on either leg; the other is derived from the maker's price, always rounded in the
 // MAKER's favor (a sat of rounding must never let retail extract size the maker didn't quote).
+//
+// Fee incidence — TAKER-pays on RFQ (peer link swaps keep their buyer-pays structure):
+//   buy:  the taker is the BTC sender, so the engine's normal gross-up (terms + fee on top) already
+//         charges the taker; the maker receives terms.btcSats in full. Nothing to adjust here.
+//   sell: the maker is the BTC sender, so we quote the taker's proceeds NET of the fee —
+//         btcSats = takerNetOfGross(size × bid) — which makes the maker's all-in outlay
+//         (terms.btcSats + fee gross-up) exactly its quoted price, and the fee lands on the taker.
 const sideKey = (side) => (side === "buy" ? "ask" : "bid");
 function derive(side, price, { btcSats, qbtSats }) {
-  if (qbtSats > 0) return { qbtSats: Math.floor(qbtSats), btcSats: side === "buy" ? Math.ceil(qbtSats * price) : Math.floor(qbtSats * price) };
-  if (btcSats > 0) return { btcSats: Math.floor(btcSats), qbtSats: side === "buy" ? Math.floor(btcSats / price) : Math.ceil(btcSats / price) };
+  if (qbtSats > 0) {
+    const q = Math.floor(qbtSats);
+    return { qbtSats: q, btcSats: side === "buy" ? Math.ceil(q * price) : takerNetOfGross(Math.floor(q * price)) };
+  }
+  if (btcSats > 0) {
+    const b = Math.floor(btcSats);   // buy: what the taker's BTC buys; sell: the NET proceeds the taker asked for (fee added back before sizing the QBT)
+    return { btcSats: b, qbtSats: side === "buy" ? Math.floor(b / price) : Math.ceil((b + feeTotalOn(b)) / price) };
+  }
   throw new Error("btcSats or qbtSats required");
 }
 function liveSides(side) {
