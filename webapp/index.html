@@ -166,18 +166,39 @@
   .qa .a { color:var(--mut); font-size:13.7px; line-height:1.58; margin:0; }
   .qa .a a { color:var(--accent); }
   @media (max-width:640px){ .qa-grid { grid-template-columns:1fr; } }
-  /* API reference: one row per endpoint (method badge + path, description below). */
-  .api-list { margin-top:6px; }
-  .api-ep { padding:12px 0; border-bottom:1px solid var(--line); }
-  .api-ep:last-child { border-bottom:0; }
-  .api-ep .row1 { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
-  .api-m { font-size:10.5px; font-weight:700; padding:2px 7px; border-radius:5px; font-family:var(--mono); letter-spacing:.04em; flex:none; }
+  /* API reference — a compact reference-doc layout: labeled base-URL field, an auth callout, and
+     one card per section holding aligned endpoint rows (method column · path · auth chip · blurb). */
+  .api-base { display:flex; align-items:center; gap:12px; background:var(--surface); border:1px solid var(--line);
+    border-radius:10px; padding:11px 14px; margin-top:16px; }
+  .api-base .lbl { font-size:10.5px; font-weight:650; letter-spacing:.09em; text-transform:uppercase; color:var(--mut); flex:none; }
+  .api-base .url { font-family:var(--mono); font-size:13px; color:var(--ink); word-break:break-all; }
+  .api-authbox { display:flex; gap:12px; align-items:flex-start; background:var(--accent-soft); border:1px solid var(--accent-line);
+    border-radius:10px; padding:13px 15px; margin-top:12px; max-width:none; }
+  .api-authbox .ico { flex:none; color:var(--accent); margin-top:1px; }
+  .api-authbox p { margin:0; font-size:13.3px; line-height:1.58; color:var(--ink-2); }
+  .api-authbox code { font-family:var(--mono); font-size:12px; background:rgba(0,0,0,.25); padding:1px 5px; border-radius:4px; color:var(--ink); }
+  .api-card { background:var(--surface); border:1px solid var(--line); border-radius:14px; overflow:hidden; }
+  .api-card-head { display:flex; align-items:baseline; justify-content:space-between; gap:12px;
+    padding:14px 18px; border-bottom:1px solid var(--line); background:linear-gradient(var(--surface-2),var(--surface)); }
+  .api-card-head h3 { margin:0; font-size:14.5px; font-weight:640; letter-spacing:-.01em; color:var(--ink); }
+  .api-card-head .count { font-size:11px; font-weight:600; letter-spacing:.03em; color:var(--mut); font-variant-numeric:tabular-nums; }
+  .api-ep { display:grid; grid-template-columns:52px minmax(0,1fr); gap:2px 14px; padding:13px 18px; border-top:1px solid var(--line); transition:background var(--dur); }
+  .api-ep:first-child { border-top:0; }
+  .api-ep:hover { background:var(--surface-2); }
+  .api-ep .row1 { grid-column:2; display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+  .api-m { grid-row:1; align-self:center; font-size:10px; font-weight:700; padding:3px 0; width:100%; text-align:center; border-radius:5px;
+    font-family:var(--mono); letter-spacing:.04em; }
   .api-m.get { color:var(--accent); background:var(--accent-soft); }
   .api-m.post { color:var(--warn); background:var(--warn-soft); }
-  .api-path { font-family:var(--mono); font-size:13.5px; color:var(--ink); word-break:break-all; }
-  .api-desc { font-size:13px; color:var(--mut); line-height:1.5; margin:5px 0 0; }
+  .api-path { font-family:var(--mono); font-size:13.5px; color:var(--ink); word-break:break-all; font-weight:500; }
+  .api-auth { margin-left:auto; font-size:10px; font-weight:600; letter-spacing:.03em; padding:2px 8px; border-radius:999px;
+    border:1px solid var(--line-2); color:var(--mut); white-space:nowrap; }
+  .api-auth.tok { color:var(--accent); border-color:var(--accent-line); background:var(--accent-soft); }
+  .api-auth.key { color:var(--warn); border-color:var(--warn-soft); background:var(--warn-soft); }
+  .api-desc { grid-column:2; font-size:13px; color:var(--mut); line-height:1.5; margin:5px 0 0; }
   .api-desc code { font-family:var(--mono); font-size:12px; background:var(--surface-2); padding:1px 5px; border-radius:4px; color:var(--ink-2); }
-  .api-base { font-family:var(--mono); font-size:12.5px; background:var(--surface); border:1px solid var(--line); border-radius:8px; padding:9px 12px; margin-top:14px; word-break:break-all; color:var(--ink); }
+  .api-groups { display:flex; flex-direction:column; gap:18px; margin-top:8px; }
+  @media (max-width:560px){ .api-ep { grid-template-columns:1fr; } .api-m { width:48px; grid-row:auto; } .api-ep .row1, .api-desc { grid-column:1; } }
   /* Resume-a-swap button: timestamp on top, trade amounts smaller below. */
   .resume-btn { line-height:1.3; padding:11px 14px; }
   .resume-when { font-size:14.5px; font-weight:640; }

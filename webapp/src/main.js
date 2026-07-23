@@ -1259,28 +1259,36 @@ window.addEventListener("drop", async (e) => {
 });
 
 // ── API reference page (linked from the header) ───────────────────────────────
+// Each endpoint: [method, path, descKey, auth?] — auth is "" (public), "tok" (per-swap X-Swap-Token),
+// "mtok" (order-book makerToken), or "key" (RFQ X-Maker-Key). The chip on the right mirrors it.
+const API_AUTH = { "": ["apiAuthPublic", ""], tok: ["apiAuthToken", "tok"], mtok: ["apiAuthMakerTok", "tok"], key: ["apiAuthMakerKey", "key"] };
 const API_GROUPS = [
   { head: "apiSecPublic", eps: [["GET", "/health", "apiHealth"], ["GET", "/feerates", "apiFeerates"], ["GET", "/trades", "apiTrades"]] },
-  { head: "apiSecRfq", eps: [["GET", "/rfq", "apiRfqDepth"], ["GET", "/rfq/quote", "apiRfqQuote"], ["POST", "/rfq/take", "apiRfqTake"], ["POST", "/rfq/maker", "apiRfqMaker"]] },
-  { head: "apiSecBook", eps: [["GET", "/offers", "apiBook"], ["POST", "/offers", "apiPostOffer"], ["POST", "/offers/:id/take", "apiTake"], ["GET", "/offers/:id", "apiMakerView"], ["POST", "/offers/:id/cancel", "apiCancelOffer"]] },
-  { head: "apiSecSwap", eps: [["POST", "/swaps", "apiCreateSwap"], ["GET", "/swaps/:id", "apiView"], ["GET", "/swaps/:id/events", "apiEvents"], ["POST", "/swaps/:id/party", "apiParty"], ["POST", "/swaps/:id/broadcast", "apiBroadcast"], ["POST", "/swaps/:id/finish", "apiFinish"], ["POST", "/swaps/:id/cancel", "apiCancelSwap"], ["GET", "/swaps/:id/beat", "apiBeat"]] },
+  { head: "apiSecRfq", eps: [["GET", "/rfq", "apiRfqDepth"], ["GET", "/rfq/quote", "apiRfqQuote"], ["POST", "/rfq/take", "apiRfqTake"], ["POST", "/rfq/maker", "apiRfqMaker", "key"]] },
+  { head: "apiSecBook", eps: [["GET", "/offers", "apiBook"], ["POST", "/offers", "apiPostOffer"], ["POST", "/offers/:id/take", "apiTake"], ["GET", "/offers/:id", "apiMakerView", "mtok"], ["POST", "/offers/:id/cancel", "apiCancelOffer", "mtok"]] },
+  { head: "apiSecSwap", eps: [["POST", "/swaps", "apiCreateSwap"], ["GET", "/swaps/:id", "apiView", "tok"], ["GET", "/swaps/:id/events", "apiEvents", "tok"], ["POST", "/swaps/:id/party", "apiParty", "tok"], ["POST", "/swaps/:id/broadcast", "apiBroadcast", "tok"], ["POST", "/swaps/:id/finish", "apiFinish", "tok"], ["POST", "/swaps/:id/cancel", "apiCancelSwap", "tok"], ["GET", "/swaps/:id/beat", "apiBeat", "tok"]] },
 ];
+const LOCK_SVG = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>`;
 function stepApi() {
   if (rerender !== stepApi) _prevView = rerender;
   rerender = stepApi;
   const back = () => { rerender = _prevView || (() => init()); rerender(); };
   markScreen(back, "/api");
-  const ep = ([m, path, dk]) => h("div", { class: "api-ep" },
-    h("div", { class: "row1" }, h("span", { class: "api-m " + m.toLowerCase() }, m), h("code", { class: "api-path" }, path)),
-    h("div", { class: "api-desc" }, t(dk)));
+  const ep = ([m, path, dk, auth = ""]) => {
+    const [chipKey, chipClass] = API_AUTH[auth] || API_AUTH[""];
+    return h("div", { class: "api-ep" },
+      h("span", { class: "api-m " + m.toLowerCase() }, m),
+      h("div", { class: "row1" }, h("code", { class: "api-path" }, path), h("span", { class: "api-auth " + chipClass }, t(chipKey))),
+      h("div", { class: "api-desc" }, t(dk)));
+  };
   render(h("div", { class: "page" },
     pageHead(t("apiTitle"), back),
     h("p", { class: "page-intro" }, t("apiIntro")),
-    h("div", { class: "api-base" }, "Base URL  ·  " + DEFAULT_COORD),
-    h("p", { class: "note", style: "margin-top:10px;max-width:62ch" }, t("apiAuthNote")),
-    ...API_GROUPS.map((g) => h("section", { class: "page-section" },
-      h("h2", {}, t(g.head)),
-      h("div", { class: "api-list" }, ...g.eps.map(ep)))),
+    h("div", { class: "api-base" }, h("span", { class: "lbl" }, "Base URL"), h("span", { class: "url" }, DEFAULT_COORD)),
+    h("div", { class: "api-authbox" }, h("span", { class: "ico", html: LOCK_SVG }), h("p", { html: t("apiAuthNote") })),
+    h("div", { class: "api-groups" }, ...API_GROUPS.map((g) => h("section", { class: "api-card" },
+      h("div", { class: "api-card-head" }, h("h3", {}, t(g.head)), h("span", { class: "count" }, t("apiEpCount", { n: g.eps.length }))),
+      ...g.eps.map(ep)))),
   ));
 }
 
