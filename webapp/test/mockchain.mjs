@@ -18,6 +18,7 @@ export class MockChain {
     this.utxo = new Map();       // `${txid}:${vout}` -> { txid, vout, spkHex, amountSats, height, spent }
     this.tx = new Map();         // txid -> parsed tx (vin/vout/wit)
     this.addr = new Map();       // address -> spkHex (so the bot can fund by address)
+    this.spentBy = new Map();    // `${txid}:${vout}` -> spending txid (for spendingTxid)
   }
   register(address, spkHex) { this.addr.set(address, spkHex); return this; }
   mine(n = 1) { this.height += n; return this.height; }
@@ -42,11 +43,12 @@ export class MockChain {
   async broadcast(txHex) {
     const bytes = Uint8Array.from(txHex.match(/../g).map((h) => parseInt(h, 16)));
     const t = parseTx(bytes), txid = txidOf(bytes);
-    for (const [prevout, vout] of t.vin) { const k = `${revHex(prevout)}:${vout}`; const u = this.utxo.get(k); if (u) u.spent = true; }
+    for (const [prevout, vout] of t.vin) { const k = `${revHex(prevout)}:${vout}`; const u = this.utxo.get(k); if (u) u.spent = true; this.spentBy.set(k, txid); }
     t.vout.forEach(([value, spk], i) => this.utxo.set(`${txid}:${i}`, { txid, vout: i, spkHex: hex(spk), amountSats: Number(value), height: this.height, spent: false }));
     this.tx.set(txid, t);
     return txid;
   }
+  async spendingTxid(txid, vout) { return this.spentBy.get(`${txid}:${vout}`) || null; }
   async getTx(txid) {
     const t = this.tx.get(txid);
     if (!t) throw new Error(`mockchain: unknown tx ${txid}`);
@@ -65,7 +67,7 @@ export function installMocks(qbit, btc) {
     const mock = m[leg];
     real.backend = "mock"; real.watch = "scan";
     real.height = () => mock.heightFn();
-    for (const fn of ["findOutput", "isUnspent", "testAccept", "broadcast", "getTx", "confs", "confTarget", "pruneWatch"]) real[fn] = (...a) => mock[fn](...a);
+    for (const fn of ["findOutput", "isUnspent", "spendingTxid", "testAccept", "broadcast", "getTx", "confs", "confTarget", "pruneWatch"]) real[fn] = (...a) => mock[fn](...a);
   }
   return m;
 }

@@ -176,6 +176,19 @@ export class Chain {
     if (this.backend === "esplora") { const o = await (await esplora(`/tx/${txid}/outspend/${vout}`)).json(); return !o.spent; }
     const o = await this.rpc("gettxout", txid, vout, true); return o != null && o !== "null" && o !== "";
   }
+  // The txid that SPENT an outpoint (a claim or refund), or null if still unspent / unknown. Best-effort:
+  //   esplora — /outspend gives the spender directly (confirmed or mempool);
+  //   rpc/dev — gettxspendingprevout finds a MEMPOOL spender (Bitcoin Core 24+). The coordinator polls
+  //             every ~2s, so an out-of-band claim is nearly always seen while still 0-conf; a spend that
+  //             confirmed entirely between polls (never seen in-mempool by us) may return null.
+  async spendingTxid(txid, vout) {
+    try {
+      if (this.backend === "esplora") { const o = await (await esplora(`/tx/${txid}/outspend/${vout}`)).json(); return o?.spent ? (o.txid || null) : null; }
+      const r = await this.rpc("gettxspendingprevout", JSON.stringify([{ txid, vout }]));
+      const hit = Array.isArray(r) ? r.find((x) => x.spendingtxid) : null;
+      return hit?.spendingtxid || null;
+    } catch { return null; }   // method unsupported / node transient — caller retries next tick
+  }
   async testAccept(txHex) {
     if (this.backend === "esplora") return { allowed: true };   // Esplora has no testmempoolaccept; broadcast surfaces errors
     const r = (await this.rpc("testmempoolaccept", JSON.stringify([txHex])))[0]; return { allowed: r.allowed, reason: r["reject-reason"] };

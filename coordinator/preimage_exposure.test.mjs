@@ -54,13 +54,16 @@ const mk = () => createSwap({ btcSats: 100000, qbtSats: 500000000 });
   ck(view(s, "alice").preimage === PRE && view(s, "bob").preimage === PRE, "post-reveal (public on-chain): both parties see the preimage — the intended completion path");
 }
 
-// ── 3) SOURCE GUARD: exactly one writer of s.preimage, and it lives in applyEffects (post-broadcast) ──
+// ── 3) SOURCE GUARD: every writer of s.preimage extracts it from a verified on-chain witness ──────────
+// Two writers now: applyEffects (coordinator/watchtower broadcast) and poll()'s out-of-band backfill (for
+// a claim a party broadcast directly). BOTH must set s.preimage ONLY from a claim-tx witness item that
+// hashes to s.H — never from client input — so the "public-once-on-chain" invariant still holds.
 {
   const src = readFileSync(new URL("./swap.js", import.meta.url), "utf8");
   const writes = [...src.matchAll(/\bs\.preimage\s*=(?!=)/g)];   // assignments only, not ==/===
-  ck(writes.length === 1, `s.preimage has exactly one assignment in swap.js (found ${writes.length})`);
-  const fn = src.slice(src.indexOf("async function applyEffects"), src.indexOf("async function applyEffects") + 700);
-  ck(/s\.preimage\s*=/.test(fn) && /sha256\(bin\(x\)\)\)\s*===\s*s\.H/.test(fn), "the sole writer is in applyEffects, gated on witness sha256 === s.H (extracted from a broadcast tx)");
+  ck(writes.length === 2, `s.preimage has exactly two (witness-gated) assignments in swap.js (found ${writes.length})`);
+  const guarded = writes.every((w) => /wit\.find\([^;]*hex\(sha256\(bin\(x\)\)\)\s*===\s*s\.H/.test(src.slice(Math.max(0, w.index - 260), w.index)));
+  ck(guarded, "every s.preimage assignment is gated on a witness item hashing to s.H (from a broadcast tx, never client input)");
 }
 
 console.log(ok ? "\nPASS — preimage is never injectable and never exposed pre-reveal; only public-once-on-chain" : "\nFAIL");

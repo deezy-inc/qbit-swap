@@ -127,7 +127,7 @@ Each chain picks a backend via `<CHAIN>_BACKEND` (falls back to `COORD_CHAIN`, t
   rate-limit handling (`ESPLORA_MIN_INTERVAL_MS`, `ESPLORA_MAX_RETRIES`). This backend is BTC-only, so the
   QBT leg uses `dev`/`rpc` against your own `qbitd` (its data source — unrelated to how broadcastable QBT is).
 
-Other knobs: `COORD_DB=/path/state.json` (JSON persistence; default in-memory) · `RATE_MAX=120`
+Other knobs: `COORD_DB=/path/state.json` (JSON snapshot persistence, written atomically via temp+rename; default in-memory) · `RATE_MAX=120`
 (per-IP writes/min) · `DEV_CONFS_CAP` (cap the reorg-safe conf gate on hashrate-less regtest).
 
 ### HTLC addresses + timelocks (set these for the deploy network)

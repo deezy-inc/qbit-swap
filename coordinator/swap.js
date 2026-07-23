@@ -13,7 +13,7 @@
 // by which token (alice/bob) each party holds; the vulnerable "initiator sells QBT" arrangement is no
 // longer constructible. `direction` is retained as "btc2qbt" on every swap for view/compat.
 import { randomBytes } from "node:crypto";
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync, renameSync } from "node:fs";
 import { sha256 } from "@noble/hashes/sha2.js";
 import { bytesToHex as hex, hexToBytes as bin } from "@noble/hashes/utils.js";
 import {
@@ -38,7 +38,10 @@ const DB_PATH = process.env.COORD_DB || null;
 function persist() {
   if (!DB_PATH) return;
   const dump = [...swaps.values()].map(({ _sig, _online, presence, ...s }) => s);   // presence is ephemeral
-  try { writeFileSync(DB_PATH, JSON.stringify(dump)); } catch { /* best effort */ }
+  // Atomic write: a plain writeFileSync truncates the file first, so power-loss MID-WRITE leaves a
+  // corrupt/empty JSON that load() then discards → total state loss. Write a temp file, fsync-durable via
+  // the OS, then rename() (atomic on the same filesystem) so the live file is always a complete snapshot.
+  try { const tmp = `${DB_PATH}.tmp`; writeFileSync(tmp, JSON.stringify(dump)); renameSync(tmp, DB_PATH); } catch { /* best effort */ }
 }
 function load() {
   if (!DB_PATH) return;
@@ -368,6 +371,25 @@ export async function poll(s) {
   for (const leg of ["btc", "qbit"]) if (s.funding[leg] && !s.funding[leg].unconfirmed && !s.funding[leg].spent && !(await chainOf(leg).isUnspent(s.funding[leg].txid, s.funding[leg].vout))) s.funding[leg].spent = true;
   // Same spent-detection for an underfunded deposit, so its refund flips the swap to REFUNDED.
   for (const leg of ["btc", "qbit"]) { const sf = s.shortFunded?.[leg]; if (sf && !sf.unconfirmed && !sf.spent && !(await chainOf(leg).isUnspent(sf.txid, sf.vout))) sf.spent = true; }
+
+  // Backfill the spending txid for a claim/refund that landed OUT OF BAND — a party's own node, or the
+  // client's direct-broadcast fallback when we were unreachable. In those cases poll marks the deposit
+  // spent but applyEffects never ran, so s.broadcasts (and thus the recorded claim txid) would be empty
+  // on an otherwise-COMPLETE swap. Best-effort: find the spender and classify it by whether its witness
+  // reveals the preimage (claim) or not (refund). Runs once per leg — skipped the moment a record exists.
+  // Placed before the COMPLETE check below so an out-of-band QBT claim's preimage is captured in time.
+  for (const leg of ["btc", "qbit"]) {
+    const f = s.funding[leg];
+    if (!f?.spent || s.broadcasts[`${leg}:claim`] || s.broadcasts[`${leg}:refund`]) continue;
+    try {
+      const txid = await chainOf(leg).spendingTxid(f.txid, f.vout);
+      if (!txid) continue;
+      const wit = (await chainOf(leg).getTx(txid)).vin?.[0]?.txinwitness || [];
+      const pre = wit.find((x) => x.length === 64 && hex(sha256(bin(x))) === s.H);
+      if (pre) { if (!s.preimage) s.preimage = pre; s.broadcasts[`${leg}:claim`] = txid; }
+      else s.broadcasts[`${leg}:refund`] = txid;
+    } catch { /* node transient — retry next tick */ }
+  }
 
   const from = s.funding[fromLeg], to = s.funding[toLeg];
   // Confirmation depth of each deposit (0 while still in the mempool).
