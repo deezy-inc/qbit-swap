@@ -5,7 +5,7 @@
 // with ADMIN_TOKEN. Read-only: it exposes no mutation endpoints and redacts capability tokens.
 import http from "node:http";
 import { randomBytes } from "node:crypto";
-import { allSwaps, isOnline, subscribeAll, storeBackend } from "./swap.js";
+import { allSwaps, getSwap, isOnline, subscribeAll, storeBackend } from "./swap.js";
 import { allOffers } from "./offers.js";
 import { rfqStatus } from "./rfq.js";
 import { qbit, btc } from "./chain.js";
@@ -154,7 +154,7 @@ export function startAdmin(port = Number(process.env.ADMIN_PORT || 8790), opts =
       }
       if (p.startsWith("/api/swaps/")) {
         const id = p.slice("/api/swaps/".length);
-        const s = allSwaps().find((x) => x.id === id);
+        const s = getSwap(id);   // O(1) map lookup, not an O(n) scan of every swap
         return s ? json(res, 200, detail(s)) : json(res, 404, { error: "no such swap" });
       }
       if (p === "/api/offers") return json(res, 200, allOffers());

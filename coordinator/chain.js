@@ -78,9 +78,19 @@ export class Chain {
   }
 
   // ── reads (dispatch to esplora when configured) ──────────────────────────────
+  // Tip height, cached for a fraction of the watcher tick. The watcher polls EVERY swap each ~2s tick and
+  // each poll() reads both chains' heights — uncached that's 2×(active swaps) getblockcount RPCs per
+  // tick, all returning the same tip. Cache it briefly so it's ~one RPC per chain per tick regardless of
+  // swap count. Blocks are minutes apart, so a sub-second-stale tip is harmless. (dev/mock backends
+  // replace height() wholesale, so tests bypass this.)
   async height() {
-    if (this.backend === "esplora") return Number(await (await esplora("/blocks/tip/height")).text());
-    return Number(await this.rpc("getblockcount"));
+    const ttl = Number(process.env.HEIGHT_CACHE_MS || 1500);
+    if (this._h && Date.now() - this._h.at < ttl) return this._h.v;
+    const v = this.backend === "esplora"
+      ? Number(await (await esplora("/blocks/tip/height")).text())
+      : Number(await this.rpc("getblockcount"));
+    this._h = { v, at: Date.now() };
+    return v;
   }
   // Locate a confirmed UTXO paying `spkHex`. Returns null until seen. Funding-watch method by backend:
   //   esplora — indexed scripthash lookup (O(1), no scan)

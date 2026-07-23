@@ -178,6 +178,8 @@ export function startServer(port = 8787) {
       watching = true;
       setInterval(watchTick, 2000); setInterval(sweepPresence, 4000);
       setInterval(cleanupWatch, Number(process.env.WATCH_CLEANUP_MS || 21600000));  // cleanup check every 6h; rotation is count-gated
+      // Evict idle IPs from the rate-limit map so it doesn't grow unbounded with every unique client seen.
+      setInterval(() => { const now = Date.now(); for (const [ip, arr] of hits) if (!arr.some((t) => now - t < WINDOW_MS)) hits.delete(ip); }, WINDOW_MS);
       const warmFees = () => { btcFeerates().catch(() => {}); qbitFeerates().catch(() => {}); };  // keep the view's `feerates` (btc: mempool.space, qbit: node estimatesmartfee) warm
       warmFees(); setInterval(warmFees, 60000);
     }
