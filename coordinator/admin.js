@@ -5,7 +5,7 @@
 // with ADMIN_TOKEN. Read-only: it exposes no mutation endpoints and redacts capability tokens.
 import http from "node:http";
 import { randomBytes } from "node:crypto";
-import { allSwaps, getSwap, isOnline, subscribeAll, storeBackend } from "./swap.js";
+import { allSwaps, getSwap, isOnline, subscribeAll, storeBackend, persistedCounts, persistedVolume } from "./swap.js";
 import { allOffers } from "./offers.js";
 import { rfqStatus } from "./rfq.js";
 import { qbit, btc } from "./chain.js";
@@ -94,14 +94,19 @@ async function chainInfo(c) {
 }
 
 async function overview() {
-  const swaps = allSwaps();
-  const counts = {};
-  let onlineSwaps = 0, volBtc = 0, volQbt = 0;
+  const swaps = allSwaps();   // in-memory WORKING SET (active + recently-settled; long-settled are evicted)
+  // Full-history counts/volume from the store (includes evicted swaps); fall back to the working set when
+  // the backend can't aggregate (JSON/memory — nothing is evicted there, so the Map IS the full history).
+  const pc = persistedCounts(), pv = persistedVolume();
+  let onlineSwaps = 0, memVolBtc = 0, memVolQbt = 0; const memCounts = {};
   for (const s of swaps) {
-    counts[s.state] = (counts[s.state] || 0) + 1;
+    memCounts[s.state] = (memCounts[s.state] || 0) + 1;
     if (isOnline(s, "alice") || isOnline(s, "bob")) onlineSwaps++;
-    if (s.state === "COMPLETE") { volBtc += s.terms?.btcSats || 0; volQbt += s.terms?.qbtSats || 0; }
+    if (s.state === "COMPLETE") { memVolBtc += s.terms?.btcSats || 0; memVolQbt += s.terms?.qbtSats || 0; }
   }
+  const counts = pc || memCounts;
+  const volume = pv ? { btcSats: pv.btcSats, qbtSats: pv.qbtSats } : { btcSats: memVolBtc, qbtSats: memVolQbt };
+  const totalSwaps = pc ? Object.values(pc).reduce((a, n) => a + n, 0) : swaps.length;
   const offers = allOffers();
   const offerCounts = offers.reduce((a, o) => ((a[o.status] = (a[o.status] || 0) + 1), a), {});
   const [b, q] = await Promise.all([chainInfo(btc), chainInfo(qbit)]);
@@ -110,15 +115,16 @@ async function overview() {
     chains: { btc: b, qbit: q },
     counts,
     totals: {
-      swaps: swaps.length,
-      active: swaps.filter(active).length,
+      swaps: totalSwaps,
+      active: swaps.filter(active).length,   // active swaps are never evicted → always in the working set
       complete: counts.COMPLETE || 0,
       refunded: (counts.REFUNDED || 0) + (counts.ABORTED || 0),
+      inMemory: swaps.length,                // working-set size (bounded); vs totals.swaps (full history)
       onlineSwaps,
       wtActions: swaps.reduce((n, s) => n + Object.keys(s.wt || {}).length, 0),
       atRisk: swaps.reduce((n, s) => n + (riskOf(s).length ? 1 : 0), 0),
     },
-    volume: { btcSats: volBtc, qbtSats: volQbt },
+    volume,
     offers: { total: offers.length, ...offerCounts },
     rfq: rfqStatus(),   // maker-bot liquidity: who's live, quote ages, pending matches (never keys/tokens)
   };

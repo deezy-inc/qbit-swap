@@ -2,7 +2,7 @@
 // drive swaps through the same endpoints. Auth is a per-party capability token (X-Swap-Token).
 // Live updates over Server-Sent Events (GET /swaps/:id/events). Basic per-IP rate limiting.
 import http from "node:http";
-import { createSwap, getSwap, roleOf, submitParty, broadcast, view, poll, allSwaps, subscribe, markSeen, addConnection, dropConnection, sweepPresence, submitFinish, driveWatchtower, cancelSwap } from "./swap.js";
+import { createSwap, getSwap, roleOf, submitParty, broadcast, view, poll, allSwaps, subscribe, markSeen, addConnection, dropConnection, sweepPresence, submitFinish, driveWatchtower, cancelSwap, evictSettled, recentComplete } from "./swap.js";
 import { createOffer, getOffer, isMaker, book, takeOffer, cancelOffer, makerView } from "./offers.js";
 import { rfqEnabled, makerByKey, submitQuote, pendingMatches, depth, bestQuote, publicQuote, takeRfq, planFill, publicPlan, takeFill, RFQ_TTL_MS } from "./rfq.js";
 import { btc } from "./chain.js";
@@ -56,8 +56,10 @@ async function handle(req, res) {
     if (method === "GET" && url.pathname === "/trades") {
       if (!PUBLIC_TRADES) return json(res, 404, { error: "not found" });
       const lim = Math.min(Number(url.searchParams.get("limit")) || 50, 200);
-      const trades = allSwaps()
-        .filter((s) => s.state === "COMPLETE" && s.terms)
+      // Prefer the store (full history incl. evicted swaps); fall back to the in-memory working set.
+      const src = recentComplete(lim) || allSwaps().filter((s) => s.state === "COMPLETE");
+      const trades = src
+        .filter((s) => s.terms)
         .sort((a, b) => (b.settledAt || 0) - (a.settledAt || 0))
         .slice(0, lim)
         .map((s) => ({ direction: s.terms.direction, btcSats: s.terms.btcSats, qbtSats: s.terms.qbtSats, price: s.terms.btcSats / s.terms.qbtSats, settledAt: s.settledAt || null }));
@@ -180,6 +182,8 @@ export function startServer(port = 8787) {
       setInterval(cleanupWatch, Number(process.env.WATCH_CLEANUP_MS || 21600000));  // cleanup check every 6h; rotation is count-gated
       // Evict idle IPs from the rate-limit map so it doesn't grow unbounded with every unique client seen.
       setInterval(() => { const now = Date.now(); for (const [ip, arr] of hits) if (!arr.some((t) => now - t < WINDOW_MS)) hits.delete(ip); }, WINDOW_MS);
+      // Drop long-settled swaps from memory (kept in the store, reloaded on demand) so RAM stays bounded.
+      setInterval(() => { try { const n = evictSettled(); if (n) console.log(`[evict] ${n} settled swap(s) dropped from memory (still in store)`); } catch { /* transient */ } }, Number(process.env.EVICT_CHECK_MS || 1800000));
       const warmFees = () => { btcFeerates().catch(() => {}); qbitFeerates().catch(() => {}); };  // keep the view's `feerates` (btc: mempool.space, qbit: node estimatesmartfee) warm
       warmFees(); setInterval(warmFees, 60000);
     }

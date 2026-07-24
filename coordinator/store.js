@@ -52,10 +52,18 @@ function sqliteStore(path, getAll) {
   const upsert = db.prepare(`INSERT INTO swaps(id,state,order_id,settled_at,updated_at,data) VALUES(?,?,?,?,?,?)
     ON CONFLICT(id) DO UPDATE SET state=excluded.state, order_id=excluded.order_id, settled_at=excluded.settled_at, updated_at=excluded.updated_at, data=excluded.data`);
   const selectAll = db.prepare("SELECT data FROM swaps");
+  const selectOne = db.prepare("SELECT data FROM swaps WHERE id=?");
+  const countByState = db.prepare("SELECT state, COUNT(*) n FROM swaps GROUP BY state");
+  const completeVol = db.prepare("SELECT COUNT(*) n, COALESCE(SUM(CAST(json_extract(data,'$.terms.btcSats') AS INTEGER)),0) btc, COALESCE(SUM(CAST(json_extract(data,'$.terms.qbtSats') AS INTEGER)),0) qbt FROM swaps WHERE state='COMPLETE'");
+  const recentComplete = db.prepare("SELECT data FROM swaps WHERE state='COMPLETE' ORDER BY settled_at DESC LIMIT ?");
   const store = {
     backend: "sqlite",
     load() { return selectAll.all().map((r) => JSON.parse(r.data)); },
     put(swap) { const s = strip(swap); upsert.run(s.id, s.state ?? null, s.orderId ?? null, s.settledAt ?? null, Date.now(), JSON.stringify(s)); },   // one row, O(1)
+    get(id) { const r = selectOne.get(id); return r ? JSON.parse(r.data) : null; },        // load-on-demand for an evicted swap
+    counts() { const o = {}; for (const r of countByState.all()) o[r.state] = r.n; return o; },   // full-history counts (incl. evicted)
+    volume() { const r = completeVol.get(); return { complete: r.n, btcSats: r.btc, qbtSats: r.qbt }; },
+    recent(limit) { return recentComplete.all(limit).map((r) => JSON.parse(r.data)); },
     query(sql, ...params) { return db.prepare(sql).all(...params); },   // ad-hoc read (admin / external tooling)
     db,
   };

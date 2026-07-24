@@ -39,7 +39,29 @@ const token = () => randomBytes(16).toString("hex");
 const store = makeStore(process.env.COORD_DB || null, () => [...swaps.values()]);
 export const storeBackend = () => store.backend;
 export const storeQuery = (sql, ...params) => (store.query ? store.query(sql, ...params) : null);   // sqlite only; null otherwise
+export const _store = store;   // internal/test seam
 for (const s of store.load()) swaps.set(s.id, s);
+
+// ── memory bounding: evict long-settled swaps, load-on-demand from the store ─────────────────────────
+// The in-memory Map is the WORKING SET (active swaps + recently-settled). A settled swap needs no more
+// engine action (poll() and driveWatchtower() both no-op on TERMINAL), so once it's been terminal past
+// SWAP_EVICT_MS we drop it from memory — it lives on in the store and is re-loaded on demand by getSwap.
+// This bounds RAM to active + ~a day of history instead of growing forever. Only with a store that can
+// reload (sqlite): with the JSON/memory backend there's no per-id read, so we never evict.
+const EVICT_MS = Number(process.env.SWAP_EVICT_MS || 86400000);   // 24h — matches the watch-descriptor settle grace
+export function evictSettled() {
+  if (!store.get) return 0;                                        // no load-on-demand → keep everything in memory
+  const cutoff = Date.now() - EVICT_MS;
+  let n = 0;
+  for (const s of swaps.values())
+    if (TERMINAL.includes(s.state) && s.settledAt > 0 && s.settledAt < cutoff) { swaps.delete(s.id); n++; }
+  return n;
+}
+// Store-backed aggregates over ALL swaps (incl. evicted) — null when the backend can't provide them
+// (JSON/memory), so callers fall back to the in-memory working set.
+export const persistedCounts = () => (store.counts ? store.counts() : null);
+export const persistedVolume = () => (store.volume ? store.volume() : null);
+export const recentComplete = (limit) => (store.recent ? store.recent(limit) : null);
 
 // ── change pub/sub (drives SSE) ───────────────────────────────────────────────
 const subs = new Map();
@@ -259,7 +281,10 @@ export function createSwap({ btcSats, qbtSats, securityLevel = "high" }) {
   touch(s);
   return s;
 }
-export const getSwap = (id) => swaps.get(id);
+// Working set first; on a miss, load-on-demand from the store (an evicted, long-settled swap). The
+// loaded object is transient (NOT re-added to the Map) so the working set stays bounded — safe because
+// evicted swaps are TERMINAL and never mutate; they're only read (resume/view a completed swap).
+export const getSwap = (id) => swaps.get(id) || (store.get ? store.get(id) : null) || undefined;
 export const roleOf = (s, tok) => (tok === s.tokens.alice ? "alice" : tok === s.tokens.bob ? "bob" : null);
 export const allSwaps = () => [...swaps.values()];
 
